@@ -1,0 +1,3505 @@
+
+============================================================ cleaning and splitting (1).ipynb ============================================================
+
+--- cell 0 (code) ---
+!pip install google-auth google-auth-oauthlib google-api-python-client opencv-python imagehash Pillow tqdm
+
+--- cell 1 (code) ---
+import os
+
+# Check exact folder names
+for item in os.listdir("/content/drive/MyDrive"):
+    if "dataset" in item.lower() or "DATASET" in item:
+        print(repr(item))  # repr shows hidden spaces/characters
+
+--- cell 2 (code) ---
+# ── Paste this at the top of the script instead ──
+import subprocess
+subprocess.run(["pip", "install", "imagehash", "opencv-python-headless", "Pillow", "tqdm", "-q"])
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os
+
+# Find DATASET folder by searching Drive
+SOURCE_DIR = None
+for root, dirs, files in os.walk("/content/drive/MyDrive"):
+    for d in dirs:
+        if d.upper() == "DATASET":
+            SOURCE_DIR = os.path.join(root, d)
+            break
+    if SOURCE_DIR:
+        break
+
+if SOURCE_DIR:
+    print(f"✅ Found DATASET at: {SOURCE_DIR}")
+else:
+    print("❌ Still not found — listing all folders in MyDrive:")
+    for item in os.listdir("/content/drive/MyDrive"):
+        print(f"  {item}")
+
+--- cell 3 (code) ---
+"""
+Dermalytix — Dataset Cleaner (Google Colab Version)
+=====================================================
+Run this cell by cell in Google Colab.
+
+STEP 1: Mount Drive
+STEP 2: Install dependencies
+STEP 3: Run cleaner
+
+Your DATASET folder structure in Drive:
+  MyDrive/
+    DATASET/
+      acne/
+      dark spots/
+      ...
+
+Output:
+  MyDrive/
+    DATASET_CLEANED/
+      acne/
+      dark spots/
+      ...
+"""
+
+# ─────────────────────────────────────────────
+# CELL 1 — Mount Drive + Install dependencies
+# ─────────────────────────────────────────────
+from google.colab import drive
+drive.mount('/content/drive')
+
+import subprocess
+subprocess.run(["pip", "install", "imagehash", "opencv-python-headless", "Pillow", "tqdm", "-q"])
+
+
+# ─────────────────────────────────────────────
+# CELL 2 — Config (edit these if needed)
+# ─────────────────────────────────────────────
+import os
+
+# Change this line in CELL 2:
+SOURCE_DIR = "/content/drive/MyDrive/DATASET "   # <-- note the trailing space
+DEST_DIR   = "/content/drive/MyDrive/DATASET_CLEANED"
+BLUR_THRESHOLD  = 100.0   # increase to remove more blurry images
+PHASH_THRESHOLD = 5       # 0 = exact dupes only, 5 = near-dupes too
+SUPPORTED_EXTS  = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+# ─────────────────────────────────────────────
+# CELL 3 — Run the cleaner
+# ─────────────────────────────────────────────
+import shutil
+import cv2
+import imagehash
+import numpy as np
+from PIL import Image
+from tqdm import tqdm
+
+def get_phash(img_path):
+    try:
+        img = Image.open(img_path).convert("RGB")
+        return str(imagehash.phash(img, hash_size=8))
+    except:
+        return None
+
+def is_blurry(img_path, threshold):
+    img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return True
+    score = cv2.Laplacian(img, cv2.CV_64F).var()
+    return score < threshold
+
+def clean_dataset():
+    print("\n" + "="*55)
+    print("  Dermalytix Dataset Cleaner — Colab Edition")
+    print(f"  Source : {SOURCE_DIR}")
+    print(f"  Dest   : {DEST_DIR}")
+    print(f"  Blur threshold  : {BLUR_THRESHOLD}")
+    print(f"  pHash threshold : {PHASH_THRESHOLD}")
+    print("="*55 + "\n")
+
+    # Validate source exists
+    if not os.path.exists(SOURCE_DIR):
+        print(f"❌  SOURCE folder not found: {SOURCE_DIR}")
+        print("    Check that your Drive folder is named exactly 'DATASET'")
+        return
+
+    # Get condition subfolders
+    subfolders = sorted([
+        d for d in os.listdir(SOURCE_DIR)
+        if os.path.isdir(os.path.join(SOURCE_DIR, d))
+    ])
+
+    if not subfolders:
+        print("❌  No subfolders found inside DATASET/")
+        return
+
+    print(f"  Found {len(subfolders)} condition folders: {subfolders}\n")
+
+    total_before = 0
+    total_kept   = 0
+    report       = []
+
+    for condition in subfolders:
+        src_folder  = os.path.join(SOURCE_DIR, condition)
+        dest_folder = os.path.join(DEST_DIR, condition)
+        os.makedirs(dest_folder, exist_ok=True)
+
+        # Get all images
+        images = sorted([
+            f for f in os.listdir(src_folder)
+            if os.path.splitext(f)[1].lower() in SUPPORTED_EXTS
+        ])
+
+        before = len(images)
+        total_before += before
+        print(f"📂  {condition}/ — {before} images")
+
+        seen_hashes = {}
+        kept = dupes = blurry_count = 0
+
+        for fname in tqdm(images, desc=f"  Cleaning", leave=False):
+            src_path  = os.path.join(src_folder, fname)
+            dest_path = os.path.join(dest_folder, fname)
+
+            # 1. Duplicate check via pHash
+            h = get_phash(src_path)
+            if h is None:
+                continue  # unreadable file, skip
+
+            is_dupe = False
+            for seen_h in seen_hashes:
+                dist = imagehash.hex_to_hash(h) - imagehash.hex_to_hash(seen_h)
+                if dist <= PHASH_THRESHOLD:
+                    is_dupe = True
+                    dupes += 1
+                    break
+
+            if is_dupe:
+                continue
+
+            seen_hashes[h] = fname
+
+            # 2. Blur check
+            if is_blurry(src_path, BLUR_THRESHOLD):
+                blurry_count += 1
+                continue
+
+            # 3. Copy clean image to DATASET_CLEANED
+            shutil.copy2(src_path, dest_path)
+            kept += 1
+
+        total_kept += kept
+        report.append({
+            "class":   condition,
+            "before":  before,
+            "dupes":   dupes,
+            "blurry":  blurry_count,
+            "kept":    kept,
+        })
+        print(f"  ✓ Kept {kept} | Removed {dupes + blurry_count} "
+              f"(dupes: {dupes}, blurry: {blurry_count})\n")
+
+    # ── Summary table ──
+    removed = total_before - total_kept
+    print("="*58)
+    print("  SUMMARY REPORT")
+    print("="*58)
+    print(f"  {'Condition':<22} {'Before':>6} {'Dupes':>6} {'Blurry':>7} {'Kept':>6}")
+    print(f"  {'-'*54}")
+    for r in report:
+        status = "⚠️  LOW" if r["kept"] < 500 else "✅"
+        print(f"  {r['class']:<22} {r['before']:>6} {r['dupes']:>6} "
+              f"{r['blurry']:>7} {r['kept']:>6}  {status}")
+    print(f"  {'-'*54}")
+    print(f"  {'TOTAL':<22} {total_before:>6} {'':>6} {'':>7} {total_kept:>6}")
+    print(f"\n  Removed : {removed} images ({100*removed/max(total_before,1):.1f}%)")
+    print(f"  Kept    : {total_kept} images ({100*total_kept/max(total_before,1):.1f}%)")
+    print(f"\n  ✅  Clean dataset saved to Drive → DATASET_CLEANED/")
+    print(f"  ⚠️   Classes marked LOW need augmentation (under 500 images)")
+    print("="*58 + "\n")
+
+clean_dataset()
+
+--- cell 4 (code) ---
+"""
+Dermalytix — Dataset Augmentation (Colab Version)
+===================================================
+Reads from DATASET_CLEANED, augments LOW classes to 800 images,
+saves result to DATASET_AUGMENTED on Drive.
+
+Current status:
+  Acne          1264  ✅ (will keep as-is, cap at 800 for balance)
+  Dry            710  ✅ (will keep as-is)
+  Wrinkles       396  ⚠️ needs +404
+  Dark Spots     294  ⚠️ needs +506
+  Dark Circles   209  ⚠️ needs +591
+  Normal         152  ⚠️ needs +648
+  Oily           110  ⚠️ needs +690
+
+Target: 800 images per class
+"""
+
+# ── CELL 1: Install & import ──────────────────────────────
+import subprocess
+subprocess.run(["pip", "install", "albumentations", "opencv-python-headless",
+                "Pillow", "tqdm", "-q"])
+
+import os
+import cv2
+import random
+import numpy as np
+from PIL import Image
+from tqdm import tqdm
+import albumentations as A
+
+# ── CELL 2: Config ────────────────────────────────────────
+SOURCE_DIR = "/content/drive/MyDrive/DATASET_CLEANED"
+DEST_DIR   = "/content/drive/MyDrive/DATASET_AUGMENTED"
+TARGET     = 800          # target images per class
+SEED       = 42
+random.seed(SEED)
+np.random.seed(SEED)
+
+SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+# ── CELL 3: Augmentation pipeline ─────────────────────────
+# Skin-safe transforms — no extreme distortions
+augment = A.Compose([
+    A.HorizontalFlip(p=0.5),
+    A.RandomRotate90(p=0.3),
+    A.ShiftScaleRotate(
+        shift_limit=0.05, scale_limit=0.1,
+        rotate_limit=15, p=0.5
+    ),
+    A.OneOf([
+        A.RandomBrightnessContrast(
+            brightness_limit=0.2, contrast_limit=0.2, p=1.0
+        ),
+        A.HueSaturationValue(
+            hue_shift_limit=10, sat_shift_limit=20,
+            val_shift_limit=10, p=1.0
+        ),
+    ], p=0.6),
+    A.OneOf([
+        A.GaussianBlur(blur_limit=(3, 5), p=1.0),
+        A.GaussNoise(p=1.0),
+        A.Sharpen(p=1.0),
+    ], p=0.3),
+    A.RandomResizedCrop(
+        size=(224, 224), scale=(0.85, 1.0), p=0.4
+    ),
+    A.Resize(224, 224),   # ensure all outputs are 224x224
+])
+
+# ── CELL 4: Run augmentation ──────────────────────────────
+def load_images(folder):
+    paths = [
+        os.path.join(folder, f)
+        for f in os.listdir(folder)
+        if os.path.splitext(f)[1].lower() in SUPPORTED_EXTS
+    ]
+    return paths
+
+def augment_class(condition, src_folder, dest_folder, target):
+    images = load_images(src_folder)
+    current = len(images)
+    os.makedirs(dest_folder, exist_ok=True)
+
+    # Copy all originals first
+    copied = 0
+    for path in images:
+        fname = os.path.basename(path)
+        img = cv2.imread(path)
+        if img is None:
+            continue
+        img = cv2.resize(img, (224, 224))
+        cv2.imwrite(os.path.join(dest_folder, fname), img)
+        copied += 1
+
+    if current >= target:
+        print(f"  ✅ {condition}: {current} images — no augmentation needed (copied {copied})")
+        return copied
+
+    # Generate augmented images to reach target
+    needed   = target - copied
+    aug_count = 0
+
+    print(f"  🔄 {condition}: {current} → generating {needed} augmented images...")
+
+    with tqdm(total=needed, desc=f"  {condition}", leave=False) as pbar:
+        while aug_count < needed:
+            # Pick a random original image
+            src_path = random.choice(images)
+            img = cv2.imread(src_path)
+            if img is None:
+                continue
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+            # Apply augmentation
+            augmented = augment(image=img_rgb)["image"]
+            aug_bgr   = cv2.cvtColor(augmented, cv2.COLOR_RGB2BGR)
+
+            # Save with aug_ prefix + counter
+            out_name = f"aug_{aug_count:05d}.jpg"
+            cv2.imwrite(os.path.join(dest_folder, out_name), aug_bgr)
+            aug_count += 1
+            pbar.update(1)
+
+    total = copied + aug_count
+    print(f"  ✅ {condition}: {current} originals + {aug_count} augmented = {total} total")
+    return total
+
+
+def run():
+    print("\n" + "="*58)
+    print("  Dermalytix Dataset Augmentation")
+    print(f"  Source  : {SOURCE_DIR}")
+    print(f"  Dest    : {DEST_DIR}")
+    print(f"  Target  : {TARGET} images per class")
+    print("="*58 + "\n")
+
+    if not os.path.exists(SOURCE_DIR):
+        print(f"❌ Source not found: {SOURCE_DIR}")
+        return
+
+    conditions = sorted([
+        d for d in os.listdir(SOURCE_DIR)
+        if os.path.isdir(os.path.join(SOURCE_DIR, d))
+    ])
+
+    print(f"  Found {len(conditions)} classes: {conditions}\n")
+
+    report = []
+    for condition in conditions:
+        src = os.path.join(SOURCE_DIR, condition)
+        dst = os.path.join(DEST_DIR, condition)
+        total = augment_class(condition, src, dst, TARGET)
+        report.append({"class": condition, "final": total})
+
+    # Summary
+    print("\n" + "="*58)
+    print("  AUGMENTATION COMPLETE — FINAL CLASS COUNTS")
+    print("="*58)
+    print(f"  {'Class':<22} {'Images':>8}  {'Status':>10}")
+    print(f"  {'-'*50}")
+    for r in report:
+        status = "✅ Ready" if r["final"] >= TARGET else "⚠️ Low"
+        print(f"  {r['class']:<22} {r['final']:>8}  {status:>10}")
+    total_imgs = sum(r["final"] for r in report)
+    print(f"  {'-'*50}")
+    print(f"  {'TOTAL':<22} {total_imgs:>8}")
+    print(f"\n  ✅ Augmented dataset saved to Drive → DATASET_AUGMENTED/")
+    print(f"  📌 Next step: run train/val/test split on DATASET_AUGMENTED")
+    print("="*58 + "\n")
+
+run()
+
+--- cell 5 (code) ---
+"""
+Dermalytix — Train / Val / Test Split (Colab Version)
+=======================================================
+Reads from DATASET_AUGMENTED, splits into 70/15/15,
+saves to DATASET_SPLIT on Drive.
+
+Output structure:
+  DATASET_SPLIT/
+    train/
+      acne/         → 70% of images
+      dark circles/
+      ...
+    val/
+      acne/         → 15% of images
+      ...
+    test/
+      acne/         → 15% of images (real images only, no aug_)
+      ...
+
+IMPORTANT RULES:
+  - val and test sets contain REAL images only (no aug_ files)
+  - train set gets all augmented images + remaining real ones
+  - Splits are stratified — same ratio per class
+"""
+
+import os
+import shutil
+import random
+from tqdm import tqdm
+
+# ── Config ────────────────────────────────────────────────
+SOURCE_DIR  = "/content/drive/MyDrive/DATASET_AUGMENTED"
+DEST_DIR    = "/content/drive/MyDrive/DATASET_SPLIT"
+TRAIN_RATIO = 0.70
+VAL_RATIO   = 0.15
+TEST_RATIO  = 0.15
+SEED        = 42
+SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+random.seed(SEED)
+
+# ── Run split ─────────────────────────────────────────────
+def split_dataset():
+    print("\n" + "="*58)
+    print("  Dermalytix Train / Val / Test Split")
+    print(f"  Source : {SOURCE_DIR}")
+    print(f"  Dest   : {DEST_DIR}")
+    print(f"  Split  : {int(TRAIN_RATIO*100)}% train / "
+          f"{int(VAL_RATIO*100)}% val / {int(TEST_RATIO*100)}% test")
+    print(f"  Rule   : val + test = real images only (no aug_)")
+    print("="*58 + "\n")
+
+    if not os.path.exists(SOURCE_DIR):
+        print(f"❌ Not found: {SOURCE_DIR}")
+        return
+
+    conditions = sorted([
+        d for d in os.listdir(SOURCE_DIR)
+        if os.path.isdir(os.path.join(SOURCE_DIR, d))
+    ])
+
+    print(f"  Found {len(conditions)} classes: {conditions}\n")
+
+    report = []
+
+    for condition in conditions:
+        src_folder = os.path.join(SOURCE_DIR, condition)
+
+        all_files = sorted([
+            f for f in os.listdir(src_folder)
+            if os.path.splitext(f)[1].lower() in SUPPORTED_EXTS
+        ])
+
+        # Separate real vs augmented
+        real_imgs = [f for f in all_files if not f.startswith("aug_")]
+        aug_imgs  = [f for f in all_files if f.startswith("aug_")]
+
+        # Shuffle real images for random split
+        random.shuffle(real_imgs)
+
+        # Val and test come from REAL images only
+        n_real    = len(real_imgs)
+        n_val     = max(1, round(n_real * VAL_RATIO))
+        n_test    = max(1, round(n_real * TEST_RATIO))
+        n_train_real = n_real - n_val - n_test
+
+        val_files  = real_imgs[:n_val]
+        test_files = real_imgs[n_val:n_val + n_test]
+        train_real = real_imgs[n_val + n_test:]
+
+        # Train = remaining real + ALL augmented
+        train_files = train_real + aug_imgs
+
+        splits = {
+            "train": train_files,
+            "val":   val_files,
+            "test":  test_files,
+        }
+
+        for split_name, files in splits.items():
+            dest_folder = os.path.join(DEST_DIR, split_name, condition)
+            os.makedirs(dest_folder, exist_ok=True)
+            for fname in tqdm(files, desc=f"  {split_name}/{condition}", leave=False):
+                src  = os.path.join(src_folder, fname)
+                dest = os.path.join(dest_folder, fname)
+                shutil.copy2(src, dest)
+
+        report.append({
+            "class":  condition,
+            "train":  len(train_files),
+            "val":    len(val_files),
+            "test":   len(test_files),
+            "total":  len(all_files),
+        })
+        print(f"  ✅ {condition:<22} "
+              f"train={len(train_files):>4}  "
+              f"val={len(val_files):>3}  "
+              f"test={len(test_files):>3}")
+
+    # ── Summary ──
+    total_train = sum(r["train"] for r in report)
+    total_val   = sum(r["val"]   for r in report)
+    total_test  = sum(r["test"]  for r in report)
+    grand_total = total_train + total_val + total_test
+
+    print("\n" + "="*58)
+    print("  SPLIT SUMMARY")
+    print("="*58)
+    print(f"  {'Class':<22} {'Train':>6} {'Val':>5} {'Test':>5} {'Total':>7}")
+    print(f"  {'-'*52}")
+    for r in report:
+        print(f"  {r['class']:<22} {r['train']:>6} {r['val']:>5} "
+              f"{r['test']:>5} {r['total']:>7}")
+    print(f"  {'-'*52}")
+    print(f"  {'TOTAL':<22} {total_train:>6} {total_val:>5} "
+          f"{total_test:>5} {grand_total:>7}")
+    print(f"\n  ✅  Dataset split saved to Drive → DATASET_SPLIT/")
+    print(f"  📌  Next step: train EfficientNetB0 on DATASET_SPLIT/train")
+    print("="*58 + "\n")
+
+split_dataset()
+
+--- cell 6 (code) ---
+import os, shutil, random
+from tqdm import tqdm
+
+SOURCE_DIR = "/content/drive/MyDrive/DATASET_AUGMENTED"
+DEST_DIR   = "/content/drive/MyDrive/DATASET_SPLIT"
+SEED       = 42
+SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+random.seed(SEED)
+
+# Only process conditions that are MISSING or INCOMPLETE
+for split in ["train", "val", "test"]:
+    split_path = os.path.join(DEST_DIR, split)
+    existing = os.listdir(split_path) if os.path.exists(split_path) else []
+    print(f"{split}/ has: {existing}")
+
+--- cell 7 (code) ---
+import os
+
+split_dir = "/content/drive/MyDrive/DATASET_SPLIT"
+
+for split in ["train", "val", "test"]:
+    path = os.path.join(split_dir, split)
+    conditions = os.listdir(path)
+    total = sum(len(os.listdir(os.path.join(path, c))) for c in conditions)
+    print(f"\n{split}/ → {len(conditions)} folders, {total} images")
+    for c in sorted(conditions):
+        count = len(os.listdir(os.path.join(path, c)))
+        print(f"  {c:<25} {count}")
+
+--- cell 8 (code) ---
+import os
+
+# Check what's actually inside DATASET_AUGMENTED
+source = "/content/drive/MyDrive/DATASET_AUGMENTED"
+
+print("Does DATASET_AUGMENTED exist?", os.path.exists(source))
+print("\nFolders inside it:")
+for item in os.listdir(source):
+    full = os.path.join(source, item)
+    if os.path.isdir(full):
+        count = len(os.listdir(full))
+        print(f"  {repr(item)} → {count} files")
+
+# Also check DATASET_SPLIT
+split = "/content/drive/MyDrive/DATASET_SPLIT"
+print("\n\nDATASET_SPLIT exists?", os.path.exists(split))
+if os.path.exists(split):
+    for split_name in ["train", "val", "test"]:
+        sp = os.path.join(split, split_name)
+        print(f"\n  {split_name}/ exists?", os.path.exists(sp))
+        if os.path.exists(sp):
+            for cond in os.listdir(sp):
+                cp = os.path.join(sp, cond)
+                print(f"    {repr(cond)} → {len(os.listdir(cp))} files")
+
+============================================================ IMAGE MODEL TRAINING.ipynb ============================================================
+
+--- cell 0 (code) ---
+"""
+Dermalytix — EfficientNetB0 Training Script (Colab)
+=====================================================
+Classes : Acne, Dark circles, dark spots, dry, normal, oily, wrinkles:FINE LINES
+Train   : 5126 images
+Val     : 469  images
+Model   : EfficientNetB0 pretrained on ImageNet, fine-tuned
+
+Strategy:
+  Phase 1 (epochs 1–5)  : freeze base, train classifier head only
+  Phase 2 (epochs 6–15) : unfreeze last 3 layers, lower LR
+  Phase 3 (epochs 16–20): unfreeze fully if val accuracy < 80%
+
+Saves best model to Drive automatically.
+"""
+
+--- cell 1 (code) ---
+from google.colab import drive
+drive.mount('/content/drive')
+
+--- cell 2 (code) ---
+import os
+
+# Find the exact path of DATASET_SPLIT
+for root, dirs, files in os.walk("/content/drive"):
+    for d in dirs:
+        if "DATASET_SPLIT" in d:
+            print(repr(os.path.join(root, d)))
+
+--- cell 3 (code) ---
+import subprocess
+subprocess.run(["pip", "install", "torch", "torchvision", "scikit-learn", "matplotlib", "tqdm", "-q"])
+
+import os, time, copy, torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms, models
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm import tqdm
+
+print(f"PyTorch : {torch.__version__}")
+print(f"GPU     : {torch.cuda.get_device_name(0) if torch.cuda.is_available() else '❌ No GPU!'}")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+--- cell 4 (code) ---
+
+# ── CELL 2: Config ────────────────────────────────────────
+# Use EXACTLY what Cell 2 printed above
+SPLIT_DIR = "/content/drive/MyDrive/DATASET_SPLIT"   # update if Cell 2 shows different
+SAVE_DIR  = "/content/drive/MyDrive/DERMALYTIX_MODEL"
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+# Verify it works
+print("SPLIT_DIR exists:", os.path.exists(SPLIT_DIR))
+for split in ["train", "val", "test"]:
+    p = os.path.join(SPLIT_DIR, split)
+    total = sum(len(os.listdir(os.path.join(p, c))) for c in os.listdir(p))
+    print(f"  {split}: {total} images")
+
+
+--- cell 5 (code) ---
+import os, torch
+
+SPLIT_DIR     = "/content/drive/MyDrive/DATASET_SPLIT"
+SAVE_DIR      = "/content/drive/MyDrive/DERMALYTIX_MODEL"
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+NUM_CLASSES   = 7
+BATCH_SIZE    = 32
+IMG_SIZE      = 224
+SEED          = 42
+torch.manual_seed(SEED)
+
+PHASE1_EPOCHS = 5
+PHASE2_EPOCHS = 10
+PHASE3_EPOCHS = 5
+
+CLASS_NAMES = [
+    "Acne", "Dark circles", "dark spots",
+    "dry", "normal", "oily", "wrinkles:FINE LINES"
+]
+
+print("✅ Config loaded")
+print("SPLIT_DIR exists:", os.path.exists(SPLIT_DIR))
+
+--- cell 6 (code) ---
+# ── CELL 3: Data loaders ──────────────────────────────────
+train_transforms = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225]),
+])
+
+val_transforms = transforms.Compose([
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225]),
+])
+
+train_dataset = datasets.ImageFolder(os.path.join(SPLIT_DIR, "train"), train_transforms)
+val_dataset   = datasets.ImageFolder(os.path.join(SPLIT_DIR, "val"),   val_transforms)
+test_dataset  = datasets.ImageFolder(os.path.join(SPLIT_DIR, "test"),  val_transforms)
+
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,  num_workers=2)
+val_loader   = DataLoader(val_dataset,   batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+test_loader  = DataLoader(test_dataset,  batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+
+print(f"\nDataset loaded:")
+print(f"  Train : {len(train_dataset)} images")
+print(f"  Val   : {len(val_dataset)} images")
+print(f"  Test  : {len(test_dataset)} images")
+print(f"  Classes ({len(train_dataset.classes)}): {train_dataset.classes}")
+
+--- cell 7 (code) ---
+# ── CELL 4: Build model ───────────────────────────────────
+def build_model(num_classes):
+    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+
+    # Freeze ALL base layers first
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Replace classifier head for our 7 classes
+    in_features = model.classifier[1].in_features
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.3),
+        nn.Linear(in_features, 256),
+        nn.ReLU(),
+        nn.Dropout(p=0.2),
+        nn.Linear(256, num_classes)
+    )
+
+    return model.to(DEVICE)
+
+model = build_model(NUM_CLASSES)
+print(f"\nModel built: EfficientNetB0")
+print(f"  Trainable params (head only): "
+      f"{sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+
+
+
+--- cell 8 (code) ---
+# ── CELL 5: Training helpers ──────────────────────────────
+def train_epoch(model, loader, criterion, optimizer):
+    model.train()
+    total_loss, correct, total = 0, 0, 0
+    for imgs, labels in loader:
+        imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
+        optimizer.zero_grad()
+        outputs = model(imgs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * imgs.size(0)
+        correct    += (outputs.argmax(1) == labels).sum().item()
+        total      += imgs.size(0)
+    return total_loss / total, correct / total
+
+
+def eval_epoch(model, loader, criterion):
+    model.eval()
+    total_loss, correct, total = 0, 0, 0
+    with torch.no_grad():
+        for imgs, labels in loader:
+            imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
+            outputs = model(imgs)
+            loss    = criterion(outputs, labels)
+            total_loss += loss.item() * imgs.size(0)
+            correct    += (outputs.argmax(1) == labels).sum().item()
+            total      += imgs.size(0)
+    return total_loss / total, correct / total
+
+
+def unfreeze_last_n(model, n):
+    """Unfreeze last n blocks of EfficientNet features."""
+    layers = list(model.features.children())
+    for layer in layers[-n:]:
+        for param in layer.parameters():
+            param.requires_grad = True
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  Unfroze last {n} blocks → {trainable:,} trainable params")
+
+
+def unfreeze_all(model):
+    for param in model.parameters():
+        param.requires_grad = True
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  Unfroze ALL layers → {trainable:,} trainable params")
+
+--- cell 9 (code) ---
+
+
+
+# ── CELL 6: Training loop ─────────────────────────────────
+def run_training():
+    criterion    = nn.CrossEntropyLoss()
+    history      = {"train_loss":[], "val_loss":[], "train_acc":[], "val_acc":[]}
+    best_val_acc = 0.0
+    best_weights = None
+
+    # ── PHASE 1: Head only ──
+    print("\n" + "="*55)
+    print("  PHASE 1 — Training classifier head only")
+    print(f"  Epochs : {PHASE1_EPOCHS}  |  LR : 1e-3")
+    print("="*55)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
+
+    for epoch in range(1, PHASE1_EPOCHS + 1):
+        t0 = time.time()
+        tr_loss, tr_acc = train_epoch(model, train_loader, criterion, optimizer)
+        vl_loss, vl_acc = eval_epoch(model, val_loader, criterion)
+        scheduler.step()
+
+        history["train_loss"].append(tr_loss)
+        history["val_loss"].append(vl_loss)
+        history["train_acc"].append(tr_acc)
+        history["val_acc"].append(vl_acc)
+
+        if vl_acc > best_val_acc:
+            best_val_acc = vl_acc
+            best_weights = copy.deepcopy(model.state_dict())
+
+        print(f"  Epoch {epoch:02d}/{PHASE1_EPOCHS} | "
+              f"Train loss {tr_loss:.4f} acc {tr_acc:.3f} | "
+              f"Val loss {vl_loss:.4f} acc {vl_acc:.3f} | "
+              f"{'⭐ best' if vl_acc == best_val_acc else ''} "
+              f"({time.time()-t0:.0f}s)")
+
+    # ── PHASE 2: Unfreeze last 3 blocks ──
+    print("\n" + "="*55)
+    print("  PHASE 2 — Unfreezing last 3 feature blocks")
+    print(f"  Epochs : {PHASE2_EPOCHS}  |  LR : 1e-4")
+    print("="*55)
+    unfreeze_last_n(model, 3)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=PHASE2_EPOCHS)
+
+    for epoch in range(1, PHASE2_EPOCHS + 1):
+        t0 = time.time()
+        tr_loss, tr_acc = train_epoch(model, train_loader, criterion, optimizer)
+        vl_loss, vl_acc = eval_epoch(model, val_loader, criterion)
+        scheduler.step()
+
+        history["train_loss"].append(tr_loss)
+        history["val_loss"].append(vl_loss)
+        history["train_acc"].append(tr_acc)
+        history["val_acc"].append(vl_acc)
+
+        if vl_acc > best_val_acc:
+            best_val_acc = vl_acc
+            best_weights = copy.deepcopy(model.state_dict())
+
+        print(f"  Epoch {epoch:02d}/{PHASE2_EPOCHS} | "
+              f"Train loss {tr_loss:.4f} acc {tr_acc:.3f} | "
+              f"Val loss {vl_loss:.4f} acc {vl_acc:.3f} | "
+              f"{'⭐ best' if vl_acc == best_val_acc else ''} "
+              f"({time.time()-t0:.0f}s)")
+
+    # ── PHASE 3: Unfreeze all (only if val acc < 80%) ──
+    if best_val_acc < 0.80:
+        print("\n" + "="*55)
+        print(f"  PHASE 3 — Val acc {best_val_acc:.1%} < 80% → unfreezing all layers")
+        print(f"  Epochs : {PHASE3_EPOCHS}  |  LR : 1e-5")
+        print("="*55)
+        unfreeze_all(model)
+        optimizer = optim.Adam(model.parameters(), lr=1e-5)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=PHASE3_EPOCHS)
+
+        for epoch in range(1, PHASE3_EPOCHS + 1):
+            t0 = time.time()
+            tr_loss, tr_acc = train_epoch(model, train_loader, criterion, optimizer)
+            vl_loss, vl_acc = eval_epoch(model, val_loader, criterion)
+            scheduler.step()
+
+            history["train_loss"].append(tr_loss)
+            history["val_loss"].append(vl_loss)
+            history["train_acc"].append(tr_acc)
+            history["val_acc"].append(vl_acc)
+
+            if vl_acc > best_val_acc:
+                best_val_acc = vl_acc
+                best_weights = copy.deepcopy(model.state_dict())
+
+            print(f"  Epoch {epoch:02d}/{PHASE3_EPOCHS} | "
+                  f"Train loss {tr_loss:.4f} acc {tr_acc:.3f} | "
+                  f"Val loss {vl_loss:.4f} acc {vl_acc:.3f} | "
+                  f"{'⭐ best' if vl_acc == best_val_acc else ''} "
+                  f"({time.time()-t0:.0f}s)")
+    else:
+        print(f"\n  ✅ Val acc {best_val_acc:.1%} ≥ 80% — skipping Phase 3")
+
+    # ── Save best model ──
+    model.load_state_dict(best_weights)
+    save_path = os.path.join(SAVE_DIR, "dermalytix_best.pth")
+    torch.save({
+        "model_state_dict": best_weights,
+        "class_names":      CLASS_NAMES,
+        "val_acc":          best_val_acc,
+        "num_classes":      NUM_CLASSES,
+    }, save_path)
+    print(f"\n  ✅ Best model saved → {save_path}")
+    print(f"  🏆 Best val accuracy : {best_val_acc:.2%}")
+
+    return history
+
+history = run_training()
+
+--- cell 10 (code) ---
+# ── CELL 7: Plot training curves ──────────────────────────
+def plot_history(history):
+    epochs = range(1, len(history["train_acc"]) + 1)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    ax1.plot(epochs, history["train_acc"], label="Train acc")
+    ax1.plot(epochs, history["val_acc"],   label="Val acc")
+    ax1.axhline(0.8, color="red", linestyle="--", label="80% target")
+    ax1.set_title("Accuracy"); ax1.set_xlabel("Epoch")
+    ax1.legend(); ax1.grid(True, alpha=0.3)
+
+    ax2.plot(epochs, history["train_loss"], label="Train loss")
+    ax2.plot(epochs, history["val_loss"],   label="Val loss")
+    ax2.set_title("Loss"); ax2.set_xlabel("Epoch")
+    ax2.legend(); ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plot_path = os.path.join(SAVE_DIR, "training_curves.png")
+    plt.savefig(plot_path, dpi=120)
+    plt.show()
+    print(f"  Plot saved → {plot_path}")
+
+plot_history(history)
+
+--- cell 11 (code) ---
+# ── CELL 8: Final evaluation on test set ─────────────────
+def evaluate_test():
+    model.eval()
+    all_preds, all_labels = [], []
+    with torch.no_grad():
+        for imgs, labels in test_loader:
+            imgs = imgs.to(DEVICE)
+            preds = model(imgs).argmax(1).cpu().numpy()
+            all_preds.extend(preds)
+            all_labels.extend(labels.numpy())
+
+    print("\n" + "="*55)
+    print("  FINAL TEST SET EVALUATION")
+    print("="*55)
+    print(classification_report(
+        all_labels, all_preds,
+        target_names=train_dataset.classes,
+        digits=3
+    ))
+
+    # Confusion matrix
+    cm = confusion_matrix(all_labels, all_preds)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    im = ax.imshow(cm, cmap="Blues")
+    ax.set_xticks(range(NUM_CLASSES)); ax.set_xticklabels(train_dataset.classes, rotation=35, ha="right")
+    ax.set_yticks(range(NUM_CLASSES)); ax.set_yticklabels(train_dataset.classes)
+    for i in range(NUM_CLASSES):
+        for j in range(NUM_CLASSES):
+            ax.text(j, i, cm[i,j], ha="center", va="center",
+                    color="white" if cm[i,j] > cm.max()/2 else "black")
+    ax.set_title("Confusion Matrix — Test Set")
+    plt.colorbar(im); plt.tight_layout()
+    cm_path = os.path.join(SAVE_DIR, "confusion_matrix.png")
+    plt.savefig(cm_path, dpi=120); plt.show()
+    print(f"  Confusion matrix saved → {cm_path}")
+
+evaluate_test()
+
+--- cell 12 (code) ---
+# See what the model is confusing oily and normal with
+import torch
+import numpy as np
+
+model.eval()
+all_preds, all_labels = [], []
+
+with torch.no_grad():
+    for imgs, labels in test_loader:
+        imgs = imgs.to(DEVICE)
+        preds = model(imgs).argmax(1).cpu().numpy()
+        all_preds.extend(preds)
+        all_labels.extend(labels.numpy())
+
+# Print confusion for oily and normal only
+from sklearn.metrics import confusion_matrix
+import pandas as pd
+
+classes = train_dataset.classes
+cm = confusion_matrix(all_labels, all_preds)
+df = pd.DataFrame(cm, index=classes, columns=classes)
+print("Full confusion matrix:")
+print(df.to_string())
+print("\nOily row   → what oily images got predicted as")
+print(df.loc["oily"])
+print("\nNormal row → what normal images got predicted as")
+print(df.loc["normal"])
+
+--- cell 13 (code) ---
+# ── FIX: Weighted loss retrain — fix dry/oily/normal confusion ──────────
+import torch, copy, time
+import torch.nn as nn
+import torch.optim as optim
+
+# Higher weight = model punished more for getting that class wrong
+# Order: Acne, Dark circles, dark spots, dry, normal, oily, wrinkles
+class_weights = torch.tensor([
+    1.0,  # Acne         — perfect, no change
+    1.0,  # Dark circles — perfect, no change
+    1.0,  # dark spots   — good, no change
+    2.0,  # dry          — confusing with oily/normal → penalize
+    2.5,  # normal       — small class → penalize more
+    3.0,  # oily         — smallest + most confused → highest penalty
+    1.0,  # wrinkles     — good, no change
+]).to(DEVICE)
+
+criterion = nn.CrossEntropyLoss(weight=class_weights)
+
+# Unfreeze all layers
+for param in model.parameters():
+    param.requires_grad = True
+
+optimizer = optim.Adam(model.parameters(), lr=1e-5)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+best_val_acc = 0.0
+best_weights_fix = None
+
+print("="*55)
+print("  FIXING — Weighted retrain (10 epochs)")
+print("  Targeting: dry / oily / normal confusion")
+print("="*55)
+
+for epoch in range(1, 11):
+    t0 = time.time()
+    tr_loss, tr_acc = train_epoch(model, train_loader, criterion, optimizer)
+    vl_loss, vl_acc = eval_epoch(model, val_loader, criterion)
+    scheduler.step()
+
+    if vl_acc > best_val_acc:
+        best_val_acc = vl_acc
+        best_weights_fix = copy.deepcopy(model.state_dict())
+        star = "⭐ best"
+    else:
+        star = ""
+
+    print(f"  Epoch {epoch:02d}/10 | "
+          f"Train loss {tr_loss:.4f} acc {tr_acc:.3f} | "
+          f"Val loss {vl_loss:.4f} acc {vl_acc:.3f} | "
+          f"{star} ({time.time()-t0:.0f}s)")
+
+# Load best weights from this fix run
+model.load_state_dict(best_weights_fix)
+
+# Save updated model to Drive
+save_path = os.path.join(SAVE_DIR, "dermalytix_best_v2.pth")
+torch.save({
+    "model_state_dict": best_weights_fix,
+    "class_names":      CLASS_NAMES,
+    "val_acc":          best_val_acc,
+    "num_classes":      NUM_CLASSES,
+}, save_path)
+print(f"\n  ✅ Fixed model saved → {save_path}")
+
+# Evaluate on test set
+print("\n  Running final evaluation...")
+evaluate_test()
+
+--- cell 14 (code) ---
+# ── Reload model from Drive ───────────────────────────────
+from google.colab import drive
+drive.mount('/content/drive')
+
+import torch
+import torch.nn as nn
+from torchvision import models, datasets, transforms
+import os
+
+DEVICE   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SAVE_DIR = "/content/drive/MyDrive/DERMALYTIX_MODEL"
+SPLIT_DIR = "/content/drive/MyDrive/DATASET_SPLIT"
+
+# Rebuild model architecture
+def build_model(num_classes=7):
+    model = models.efficientnet_b0(weights=None)
+    in_features = model.classifier[1].in_features
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.3),
+        nn.Linear(in_features, 256),
+        nn.ReLU(),
+        nn.Dropout(p=0.2),
+        nn.Linear(256, num_classes)
+    )
+    return model
+
+# Load saved weights
+checkpoint = torch.load(
+    os.path.join(SAVE_DIR, "dermalytix_best_v2.pth"),
+    map_location=DEVICE
+)
+model = build_model(num_classes=7)
+model.load_state_dict(checkpoint["model_state_dict"])
+model = model.to(DEVICE)
+model.eval()
+
+# Load class names from dataset
+val_transforms = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225]),
+])
+train_dataset = datasets.ImageFolder(
+    os.path.join(SPLIT_DIR, "train"), val_transforms
+)
+
+print("✅ Model loaded successfully!")
+print(f"   Classes: {train_dataset.classes}")
+print(f"   Device : {DEVICE}")
+
+--- cell 15 (code) ---
+# ── User-friendly label mapping ───────────────────────────
+
+LABEL_MAP = {
+    "Acne": {
+        "display":     "Acne / Pimples / Breakouts",
+        "description": "Active acne lesions including papules, pustules or comedones",
+        "icon":        "🔴"
+    },
+    "Dark circles": {
+        "display":     "Dark Circles / Periorbital Hyperpigmentation",
+        "description": "Darkening of the skin under and around the eyes",
+        "icon":        "👁️"
+    },
+    "dark spots": {
+        "display":     "Dark Spots / Hyperpigmentation / Post-Acne Marks",
+        "description": "Uneven skin tone, dark patches or marks left after acne or sun damage",
+        "icon":        "🟤"
+    },
+    "dry": {
+        "display":     "Dry Skin / Dehydrated Skin",
+        "description": "Skin lacking moisture, may feel tight, flaky or rough",
+        "icon":        "🏜️"
+    },
+    "normal": {
+        "display":     "Normal / Balanced Skin",
+        "description": "Well-balanced skin with no major concerns",
+        "icon":        "✨"
+    },
+    "oily": {
+        "display":     "Oily Skin / Seborrhoea",
+        "description": "Excess sebum production causing shine and enlarged pores",
+        "icon":        "💧"
+    },
+    "wrinkles": {
+        "display":     "Wrinkles / Fine Lines / Ageing Skin",
+        "description": "Signs of ageing including fine lines, wrinkles and loss of elasticity",
+        "icon":        "〰️"
+    },
+}
+
+def get_display_label(raw_class):
+    return LABEL_MAP.get(raw_class, {
+        "display":     raw_class,
+        "description": "",
+        "icon":        "🔍"
+    })
+
+# Test it
+print("Label mapping test:")
+for cls in train_dataset.classes:
+    info = get_display_label(cls)
+    print(f"  {info['icon']}  {cls:<25} → {info['display']}")
+
+--- cell 16 (code) ---
+# ── Test model with a real image (with label mapping) ─────
+from PIL import Image
+import torchvision.transforms as transforms
+import torch.nn.functional as F
+from google.colab import files
+
+# Upload an image from your computer
+print("Upload a skin image to test:")
+uploaded = files.upload()
+
+# Load and preprocess
+img_path = list(uploaded.keys())[0]
+img = Image.open(img_path).convert("RGB")
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225]),
+])
+img_tensor = transform(img)
+
+# Predict
+model.eval()
+with torch.no_grad():
+    output = model(img_tensor.unsqueeze(0).to(DEVICE))
+    probs  = F.softmax(output, dim=1)[0]
+
+# Top prediction
+top_prob, top_idx = probs.max(0)
+top_class = train_dataset.classes[top_idx.item()]
+top_info  = get_display_label(top_class)
+
+# Show results
+print("\n" + "="*52)
+print("  DERMALYTIX PREDICTION RESULTS")
+print("="*52)
+print(f"\n  {top_info['icon']}  {top_info['display']}")
+print(f"  📊 Confidence  : {top_prob.item()*100:.1f}%")
+print(f"  📝 Description : {top_info['description']}")
+
+# All class probabilities
+print("\n  All classes:")
+for cls, prob in zip(train_dataset.classes, probs):
+    info = get_display_label(cls)
+    bar  = "█" * int(prob.item() * 30)
+    print(f"  {info['icon']} {cls:<22} {prob.item()*100:5.1f}%  {bar}")
+
+# Uncertainty check
+if top_class in ["oily", "normal"] and top_prob.item() < 0.65:
+    top2_probs, top2_idxs = probs.topk(2)
+    c1 = get_display_label(train_dataset.classes[top2_idxs[0].item()])["display"]
+    c2 = get_display_label(train_dataset.classes[top2_idxs[1].item()])["display"]
+    print(f"\n  ⚠️  Low confidence — possibly:")
+    print(f"      • {c1}")
+    print(f"      • {c2}")
+    print(f"  💬 Please consult a dermatologist for accurate diagnosis")
+else:
+    print(f"\n  ✅ High confidence prediction")
+
+print("="*52)
+
+--- cell 17 (code) ---
+# ── Option A: Confidence threshold fix for oily/normal ──
+import torch
+import torch.nn.functional as F
+
+def predict_with_confidence(image_tensor, threshold=0.65):
+    """
+    Returns prediction with confidence.
+    If top class is oily/normal and confidence < threshold,
+    returns a soft combined label instead.
+    """
+    model.eval()
+    with torch.no_grad():
+        output = model(image_tensor.unsqueeze(0).to(DEVICE))
+        probs  = F.softmax(output, dim=1)[0]
+
+    top_prob, top_idx = probs.max(0)
+    top_class = train_dataset.classes[top_idx.item()]
+    top_prob  = top_prob.item()
+
+    # Soft prediction for weak classes
+    WEAK_CLASSES = ["oily", "normal"]
+    if top_class in WEAK_CLASSES and top_prob < threshold:
+        # Get top 2 predictions
+        top2_probs, top2_idxs = probs.topk(2)
+        c1 = train_dataset.classes[top2_idxs[0].item()]
+        c2 = train_dataset.classes[top2_idxs[1].item()]
+        return {
+            "prediction":  f"possibly {c1} or {c2}",
+            "confidence":  round(top_prob, 3),
+            "is_uncertain": True,
+            "advice": "Results unclear — please consult a dermatologist for accurate diagnosis"
+        }
+
+    return {
+        "prediction":   top_class,
+        "confidence":   round(top_prob, 3),
+        "is_uncertain": False,
+        "advice": None
+    }
+
+# Test it
+# Test it
+print("✅ Confidence threshold predictor ready")
+
+from PIL import Image
+import torchvision.transforms as transforms
+from google.colab import files
+
+uploaded = files.upload()
+img_path = list(uploaded.keys())[0]
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225]),
+])
+
+img = Image.open(img_path).convert("RGB")
+img_tensor = transform(img)
+
+result = predict_with_confidence(img_tensor)
+print("\nExample output:")
+print(result)
+
+============================================================ recommendation_engine (1).ipynb ============================================================
+
+--- cell 0 (code) ---
+R"""
+Dermalytix — Recommendation Engine (Pakistan Edition)
+=======================================================
+Products researched and verified as available in Pakistan.
+
+Brands: Jenpharm, Conatural, AccuFix, Vince, Saeed Ghani,
+        Bio-One, Hemani, Neutrogena, Himalaya, Garnier,
+        CeraVe, Nivea, Cetaphil, Shade by ELIXIR, The Ordinary
+
+Each routine step has a pool of 3–4 products.
+The engine randomly picks 1 from each pool per analysis.
+You can replace any product with dermatologist recommendations.
+"""
+
+import random
+from typing import Optional
+
+
+# ─────────────────────────────────────────────────────────────────
+# PRODUCT POOLS — Researched Pakistani Market
+# ─────────────────────────────────────────────────────────────────
+
+ROUTINES: dict = {
+
+    # ══════════════════════════════════════════════════════════════
+    "Acne": {
+
+        "mild": {
+            "morning": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                     "Clarins Ultra Anti-Acne Face Wash",
+                    "Accufix Salicylic Acid Fashwash"
+                ],
+                "serum": [
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                    "AccuFix Niacinamide Serum"
+
+                ],
+                "moisturiser": [
+                    "Conatural Aloe Vera Gel",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive oil-free Moisturizing Wash",
+                    "neue derma Moisturizer(gel)",
+                ],
+                "sunscreen": [
+
+                    "Jenpharm Spectrablock SPF 100",
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "AccuFix centella Sunscreen SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                     "Clarins Ultra Anti-Acne Face Wash",
+                    "Accufix Salicylic Acid Fashwash"
+                ],
+                "treatment": [
+                    "Jenpharm MandelAC Serum",
+                    "AccuFix Mandelic Acid Exfoliant",
+                    "The Ordinary Salicylic Acid 2% Solution",
+                    "accsolve lotion",
+                    "betasalic lotion"
+
+                ],
+              "moisturiser": [
+
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive oil-free Moisturizing Wash",
+                    "neue derma Moisturizer(gel)",
+                ],
+            },
+            "avoid": [
+                "Heavy oily creams and coconut oil on face",
+                "Popping or picking pimples",
+                "Skipping moisturiser (causes more oil production)",
+            ],
+            "tip": (
+                "Mild acne responds well to consistent cleansing and niacinamide. "
+                "Give products at least 4 weeks before judging results."
+            ),
+            "see_doctor": False,
+        },
+
+        "moderate": {
+            "morning": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "serum": [
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                    "AccuFix Niacinamide Serum",
+                    "Jenpharm MandelAC Serum",
+                    "Bio-One Niacinamide Serum",
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Conatural Aloe Vera Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "Neue derma Moisturizer(gel)",
+                    "CeraVe AM Facial Moisturizing Lotion",
+                ],
+                "sunscreen": [
+
+                    "Jenpharm spectra matt SPF 40",
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "La Roche-Posay Anthelios UV Control Sunscreen SPF 50",
+                    "AccuFix centella Sunscreen SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                    "AccuFix Salicylic Acid Facewash"
+                ],
+                "treatment": [
+                    "Jenpharm MandelAC Cream",
+                    "AccuFix Salicyclic Acid serum",
+                    "The Ordinary Salicylic Acid 2% Solution",
+                    "acdermin gel"
+
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Conatural Aloe Vera Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "Neue derma Moisturizer(gel)",
+                    "CeraVe AM Facial Moisturizing Lotion",
+                ],
+            },
+            "avoid": [
+                "Heavy oily moisturisers and body lotions on face",
+                "Scrubs and harsh physical exfoliants",
+                "Skipping SPF — UV worsens acne scars",
+                "Touching face frequently",
+            ],
+            "tip": (
+                "Moderate acne needs consistent actives like mandelic acid or salicylic acid. "
+                "Pakistan's humidity makes acne worse — always cleanse after sweating."
+            ),
+            "see_doctor": False,
+        },
+
+        "severe": {
+            "morning": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                    "Cetaphil Gentle Foaming Cleanser",
+                ],
+                "serum": [
+                    "Jenpharm MandelAC Serum",
+                    "AccuFix Niacinamide Serum",
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                   "Neue Derma Salicylic acid serum"
+                ],
+                "moisturiser": [
+                    "CeraVe AM Facial Moisturizing Lotion",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "Cetaphil Oil Control Moisturizer SPF 30",
+                    "Neue Derma Moisturizer (gel)."
+                ],
+                "sunscreen": [
+                    "Shade by ELIXIR SPF 50",
+                    "Jenpharm Sunblock SPF 50",
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "CeraVe Hydrating Sunscreen SPF 50",
+                    "La Roche-Posay Anthelios UV Control Sunscreen SPF 50"
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "treatment": [
+                    "Jenpharm MandelAC Cream",
+                    "AccuFix Mandelic Acid Exfoliant",
+                    "The Ordinary Salicylic Acid 2% Solution",
+                    "Vince Anti-Acne Night Cream",
+                ],
+                "moisturiser": [
+                    "CeraVe PM Facial Moisturizing Lotion",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "Cetaphil Moisturizing Cream",
+                ],
+            },
+            "avoid": [
+                "Any product with heavy oils or comedogenic ingredients",
+                "DIY remedies like toothpaste on pimples",
+                "Steroid-based creams without doctor prescription",
+                "Over-exfoliating — max once a week",
+            ],
+            "tip": (
+                "Severe acne requires medical attention. "
+                "Use this routine alongside dermatologist treatment, not instead of it."
+            ),
+            "see_doctor": True,
+        },
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    "dark spots": {
+
+        "mild": {
+            "morning": {
+                "cleanser": [
+                    "Neutrogena hydro boost gel facewash ",
+                    "Accufix SDaily hydrating Cleanser",
+                    "Conatural Rose Face Wash"
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                    "Conatural Vitamin C Serum",
+                    "The ordinary Theordinary best Ascorbyl Glucoside Solution 12%",
+                ],
+                "moisturiser": [
+                    "Vince Whitening Moisturiser SPF 20",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Nivea Luminous 630 Day Cream",
+                    "Neue Derma Mopisturizer(occlusive)"
+                ],
+                "sunscreen": [
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Jenpharm spectrablock Sunblock ",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Garnier Bright Complete Facewash",
+                    "Vince Vitamin C Face Wash",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm MandelAC Face Wash",
+                ],
+                "serum": [
+                    "Saeed Ghani Kojic Acid Serum",
+                    "Bio-One Vitamin C Serum",
+                    "Vince Skin Lightening Night Serum",
+                    "AccuFix Alpha Arbutin Serum",
+                ],
+                "moisturiser": [
+                    "Vince Skin Lightening Night Cream",
+                    "Garnier Bright Complete Night Cream",
+                    "Nivea Luminous 630 Night Cream",
+                    "Neutrogena Rapid Tone Repair Night Cream",
+                ],
+            },
+            "avoid": [
+                "Sun exposure without SPF — makes dark spots worse",
+                "Skipping sunscreen even on cloudy days",
+                "Harsh scrubs that irritate skin",
+            ],
+            "tip": (
+                "SPF is the most important product for dark spots. "
+                "Without it, no serum or cream will work. Apply every morning without fail."
+            ),
+            "see_doctor": False,
+        },
+
+        "moderate": {
+            "morning": {
+                "cleanser": [
+                    "Neutrogena hydro boost gel facewash ",
+                    "Accufix SDaily hydrating Cleanser",
+                    "Conatural Rose Face Wash"
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                    "Conatural Vitamin C Serum",
+                    "The ordinary Theordinary best Ascorbyl Glucoside Solution 12%",
+                ],
+                "moisturiser": [
+                    "Vince Whitening Moisturiser SPF 20",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Nivea Luminous 630 Day Cream",
+                    "Neue Derma Mopisturizer(occlusive)"
+                ],
+                "sunscreen": [
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Jenpharm spectrablock Sunblock ",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Garnier Bright Complete Facewash",
+                    "Vince Vitamin C Face Wash",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm MandelAC Face Wash",
+                ],
+                "serum": [
+                    "Saeed Ghani Kojic Acid Serum",
+                    "Bio-One Vitamin C Serum",
+                    "Vince Skin Lightening Night Serum",
+                    "AccuFix Alpha Arbutin Serum",
+                ],
+                "moisturiser": [
+                    "Vince Skin Lightening Night Cream",
+                    "Garnier Bright Complete Night Cream",
+                    "Nivea Luminous 630 Night Cream",
+                    "Neutrogena Rapid Tone Repair Night Cream",
+                ],
+            },
+            "avoid": [
+                "Steroid-based creams sold in Pakistan (e.g. medicated fairness creams)",
+                "Skipping sunscreen — undoes all brightening progress",
+                "Mixing too many actives at once (Vitamin C + AHA = irritation)",
+            ],
+            "tip": (
+                "Moderate dark spots need Vitamin C in the morning and an exfoliant "
+                "(AHA/kojic acid) at night. Be consistent for 8–12 weeks."
+            ),
+            "see_doctor": False,
+        },
+
+        "severe": {
+            "morning": {
+                "cleanser": [
+                    "Neutrogena hydro boost gel facewash ",
+                    "Accufix SDaily hydrating Cleanser",
+                    "Conatural Rose Face Wash"
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                    "Conatural Vitamin C Serum",
+                    "The ordinary Theordinary best Ascorbyl Glucoside Solution 12%",
+                ],
+                "moisturiser": [
+                    "Vince Whitening Moisturiser SPF 20",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Nivea Luminous 630 Day Cream",
+                    "Neue Derma Mopisturizer(occlusive)"
+                ],
+                "sunscreen": [
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Jenpharm spectrablock Sunblock ",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Garnier Bright Complete Facewash",
+                    "Vince Vitamin C Face Wash",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm MandelAC Face Wash",
+                ],
+                "serum": [
+                    "Saeed Ghani Kojic Acid Serum",
+                    "Bio-One Vitamin C Serum",
+                    "Vince Skin Lightening Night Serum",
+                    "AccuFix Alpha Arbutin Serum",
+                ],
+                "moisturiser": [
+                    "Vince Skin Lightening Night Cream",
+                    "Garnier Bright Complete Night Cream",
+                    "Nivea Luminous 630 Night Cream",
+                    "Neutrogena Rapid Tone Repair Night Cream",
+                ],
+            },
+            "avoid": [
+                "All sun exposure without high SPF",
+                "Steroid or mercury-based whitening creams",
+                "Skipping routine even one day",
+            ],
+            "tip": "Severe pigmentation or melasma needs professional treatment. Use this routine alongside dermatologist advice.",
+            "see_doctor": True,
+        },
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    "Dark circles": {
+
+        "mild": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "eye_cream": [
+                    "Saeed Ghani Under Eye Cream",
+                    "Neutrogena Rapid Dark Circle Repair Eye Cream",
+                    "L'Oreal Eye Defense Cream",
+                    "LOreal Paris - Revitalift 1.5% Hyaluronic Acid + 1% Caffeine Eye Serum"
+                    "Vince Eye Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+                "sunscreen": [
+                    "Neue Derma Sunscreen spf 50"
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Jenpharm spectra bloack Sunblock ",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Saeed Ghani Aloe Vera Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "eye_cream": [
+                    "L'Oreal Eye Defense Cream",
+                    "Saeed Ghani Under Eye Cream",
+                    "Neutrogena Rapid Dark Circle Repair Eye Cream",
+                    "Vince Eye Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+            },
+            "avoid": [
+                "Rubbing eyes aggressively",
+                "Late nights and excessive screen time",
+                "Sleeping without removing makeup",
+            ],
+            "tip": (
+                "Dark circles in Pakistan are often genetic or from sun exposure. "
+                "Eye cream + SPF + adequate sleep is the best combination."
+            ),
+            "see_doctor": False,
+        },
+
+        "moderate": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "eye_cream": [
+                    "Saeed Ghani Under Eye Cream",
+                    "Neutrogena Rapid Dark Circle Repair Eye Cream",
+                    "L'Oreal Eye Defense Cream",
+                    "LOreal Paris - Revitalift 1.5% Hyaluronic Acid + 1% Caffeine Eye Serum"
+                    "Vince Eye Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+               "sunscreen": [
+                    "Neue Derma Sunscreen spf 50"
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Jenpharm spectra bloack Sunblock ",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Saeed Ghani Aloe Vera Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "eye_cream": [
+                    "L'Oreal Eye Defense Cream",
+                    "Saeed Ghani Under Eye Cream",
+                    "Neutrogena Rapid Dark Circle Repair Eye Cream",
+                    "Vince Eye Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+            },
+            "avoid": [
+                "Salty food and excessive caffeine — causes puffiness",
+                "Sleeping on stomach — increases fluid under eyes",
+                "Rubbing eyes",
+            ],
+            "tip": (
+                "Cold compress on eyes for 5–10 minutes in the morning reduces puffiness. "
+                "Vitamin C serum helps with pigmentation under eyes."
+            ),
+            "see_doctor": False,
+        },
+
+        "severe": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "eye_cream": [
+                    "Saeed Ghani Under Eye Cream",
+                    "Neutrogena Rapid Dark Circle Repair Eye Cream",
+                    "L'Oreal Eye Defense Cream",
+                    "LOreal Paris - Revitalift 1.5% Hyaluronic Acid + 1% Caffeine Eye Serum"
+                    "Vince Eye Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+                "sunscreen": [
+                    "Neue Derma Sunscreen spf 50"
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Jenpharm spectra bloack Sunblock ",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Saeed Ghani Aloe Vera Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "eye_cream": [
+                    "L'Oreal Eye Defense Cream",
+                    "Saeed Ghani Under Eye Cream",
+                    "Neutrogena Rapid Dark Circle Repair Eye Cream",
+                    "Vince Eye Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+            },
+            "avoid": [
+                "All sun exposure without SPF",
+                "Alcohol and late nights",
+            ],
+            "tip": (
+                "Severe dark circles often have a genetic component. "
+                "Topical products help, but a dermatologist can offer professional treatments."
+            ),
+            "see_doctor": True,
+        },
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    "dry": {
+
+        "mild": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Accufix Daily hydrating cleanser",
+                    "Neutrogena Hydro Boost Gel cleanser"
+                ],
+                "serum": [
+                    "The Ordinary Hyalauronic Acid Serum",
+                    "Jenpharm Dermive Hydrating Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "CeraVe Moisturizing Cream",
+                    "Conatural Aloe Vera Gel",
+                    "Himalaya Nourishing Skin Cream",
+                ],
+                "sunscreen": [
+                    "AccuFix Cosmetics Invisible Shield with Centella sunscreen",
+                    "Sunplay SkinAqua Sunscreen SPF 50",
+                    "Neutrogena Ultra Sheer SPF 50",
+
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Saeed Ghani Aloe Vera Face Wash",
+                    "Himalaya Moisturizing Aloe Vera Face Wash",
+                ],
+                "serum": [
+                    "The Ordinary Hyalauronic Acid Serum",
+                    "Jenpharm Dermive Hydrating Serum",
+                    "AccuFix Hydrating Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "CeraVe Moisturizing Cream",
+                    "Jenpharm dermive oily moisturizer",
+                    "Neue Derma Moisturizer(occlusive)"
+                ],
+            },
+            "avoid": [
+                "Foaming or gel cleansers — too stripping for dry skin",
+                "Hot water when washing face",
+                "Alcohol-based toners",
+                "Skipping moisturiser",
+            ],
+            "tip": (
+                "Pakistan's AC in summer and heating in winter both worsen dry skin. "
+                "Apply moisturiser immediately after washing while skin is still damp."
+            ),
+            "see_doctor": False,
+        },
+ "moderate": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Accufix Daily hydrating cleanser",
+                    "Neutrogena Hydro Boost Gel cleanser"
+                ],
+                "serum": [
+                    "The Ordinary Hyalauronic Acid Serum",
+                    "Jenpharm Dermive Hydrating Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "CeraVe Moisturizing Cream",
+                    "Conatural Aloe Vera Gel",
+                    "Himalaya Nourishing Skin Cream",
+                ],
+                "sunscreen": [
+                    "AccuFix Cosmetics Invisible Shield with Centella sunscreen",
+                    "Sunplay SkinAqua Sunscreen SPF 50",
+                    "Neutrogena Ultra Sheer SPF 50",
+
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Conatural Rose Face Wash",
+                    "Accufix Daily hydrating cleanser",
+                    "Neutrogena Hydro Boost Gel cleanser"
+                ],
+                "serum": [
+                    "The Ordinary Hyalauronic Acid Serum",
+                    "Jenpharm Dermive Hydrating Serum",
+                    "COSRX snail mocin 96%"
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "CeraVe Moisturizing Cream",
+                    "Jenpharm dermive oily moisturizer",
+                    "Neue Derma Moisturizer(occlusive)"
+                ],
+            },
+            "avoid": [
+                "Any product with alcohol high in the ingredient list",
+                "Washing face more than twice a day",
+                "Skipping moisturiser — ever",
+                "Physical exfoliants like apricot scrubs",
+            ],
+            "tip": (
+                "Moderate dry skin needs ceramide-based moisturisers to repair the skin barrier. "
+                "CeraVe is ideal — available at Naheed and Fazal Din."
+            ),
+            "see_doctor": False,
+        },
+
+        "severe": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Jenpharm Dermive Moisturizing Wash",
+                    "CeraVe Hydrating Cleanser",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "serum": [
+                    "The Ordinary Hyalauronic Acid Serum",
+                    "Jenpharm Dermive Hydrating Serum",
+                    "DefyDerm Pure Hyaluronic Acid Serum "
+                ],
+                "moisturiser": [
+                    "CeraVe Moisturizing Cream",
+                    "Cetaphil Moisturizing Cream",
+                    "Jenpharm Dermive oily Moisturizer ",
+                    "Nivea Creme",
+                ],
+                "sunscreen": [
+                    "U Veil SPF 60",
+                    "Shade by ELIXIR SPF 50",
+                    "CeraVe Hydrating Sunscreen SPF 50",
+                    "Neutrogena Ultra Sheer SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Jenpharm Dermive Moisturizing Wash",
+                    "CeraVe Hydrating Cleanser",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "treatment": [
+                    "CeraVe Healing Ointment",
+                    "Saeed Ghani Hyaluronic Acid Serum",
+                    "Vaseline Intensive Care Body Lotion (dry patches only)",
+                    "AccuFix Hydrating Serum",
+                ],
+                "moisturiser": [
+                    "CeraVe Moisturizing Cream",
+                    "Cetaphil Moisturizing Cream",
+                    "Nivea Creme",
+                    "Jenpharm Dermive Moisturizing Cream",
+                ],
+            },
+            "avoid": [
+                "All drying products — foaming cleansers, AHAs, BHAs",
+                "Hot showers",
+                "Fragranced products",
+            ],
+            "tip": (
+                "Severe dry skin may indicate eczema or a compromised skin barrier. "
+                "See a dermatologist for a proper diagnosis and treatment plan."
+            ),
+            "see_doctor": True,
+        },
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    "oily": {
+
+        "mild": {
+            "morning": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                ],
+                "serum": [
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                    "AccuFix Niacinamide Serum",
+                    "Vince Niacinamide Serum",
+                    "Seravio NZ SERUM"
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturizer(gel)",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                ],
+                "sunscreen": [
+                    "Jenpharm spectrablock Sunblock ",
+                    "AccuFix Sunscreen SPF 50",
+                    "Neutrogena Ultra Sheer SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                ],
+                "serum": [
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                    "AccuFix Niacinamide Serum",
+                    "Vince Niacinamide Serum",
+                    "Radiant Glow Niacinamide 15% Serum",
+                ],
+                "moisturiser": [
+                    "Conatural Aloe Vera Gel",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "Himalaya Light Moisturizer",
+                ],
+            },
+            "avoid": [
+                "Heavy creams and face oils",
+                "Skipping moisturiser — makes skin produce more oil",
+                "Washing face more than twice a day — strips skin",
+            ],
+            "tip": (
+                "Oily skin still needs moisturiser — use a water-based gel. "
+                "Niacinamide is the best ingredient for controlling sebum production."
+            ),
+            "see_doctor": False,
+        },
+
+        "moderate": {
+            "morning": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "serum": [
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                    "AccuFix Niacinamide Serum",
+                    "Jenpharm MandelAC Serum",
+                    "Radiant Glow Niacinamide 15% Serum",
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "Conatural Aloe Vera Gel",
+                    "CeraVe AM Facial Moisturizing Lotion",
+                ],
+                "sunscreen": [
+                    "Jenpharm spectrablock Sunblock ",
+                    "AccuFix Sunscreen SPF 50",
+                    "Neutrogena Ultra Sheer SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                    "The Body Shop Tea Tree Face Wash",
+                ],
+                "serum": [
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                    "Jenpharm MandelAC Serum",
+                    "AccuFix Niacinamide Serum",
+                    "Vince Niacinamide Serum",
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "CeraVe PM Facial Moisturizing Lotion",
+                    "Neue Derma Moistiurizer(gel)"
+                ],
+            },
+            "avoid": [
+                "Coconut oil, argan oil on face",
+                "Heavy, non-comedogenic makeup",
+                "Over-cleansing — more than twice daily",
+            ],
+            "tip": (
+                "Pakistan's humid summers make oily skin worse. "
+                "Use blotting papers during the day and a clay mask once a week to deep clean pores."
+            ),
+            "see_doctor": False,
+        },
+
+        "severe": {
+            "morning": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                ],
+                "treatment": [
+                    "The Ordinary Niacinamide 10% + Zinc 1%",
+                    "AccuFix Niacinamide Serum",
+                    "Jenpharm MandelAC Serum",
+                    "Conatural Niacinamide  Serum",
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive Oil Free Moisturizer",
+                    "CeraVe AM Facial Moisturizing Lotion",
+                    "Neue Derma Moistiurizer(gel)"
+                ],
+                "sunscreen": [
+                    "Jenpharm spectramatt Sunblock SPF 40",
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "MattShield Sebum Control Sunscreen"
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Jenpharm MandelAC Face Wash",
+                    "Neutrogena Oil-Free Acne Wash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                    "Conatural Tea Tree and Neem Acne Face Wash",
+                ],
+                "treatment": [
+                    "Jenpharm MandelAC Serum",
+                    "The Ordinary Salicylic Acid 2% Solution",
+                    "AccuFix salicylic Acid serum",
+                    "Vince Anti-Acne Night Serum",
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Jenpharm Dermive Oil-Free Moisturizer",
+                    "CeraVe AM Facial Moisturizing Lotion",
+                    "Neue Derma Moistiurizer(gel)"
+                ],
+            },
+            "avoid": [
+                "All heavy oils and rich creams",
+                "Skipping moisturiser",
+                "Over-washing face",
+            ],
+            "tip": (
+                "Severe oiliness combined with persistent breakouts may need medical treatment. "
+                "A dermatologist can prescribe stronger actives."
+            ),
+            "see_doctor": True,
+        },
+    },
+
+    # ══════════════════════════════════════════════════════════════
+    "normal": {
+
+        "mild": {
+            "morning": {
+                "cleanser": [
+                    "Accufix Daily Hydrating Cleanser",
+                    "Cerave Foaming Facial Cleanser",
+                    "Conatural Rose Face Wash",
+                    "JenPharm MAXDIF Facewash",
+                    "Vince Vitamin C Face Wash",
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                    "Conatural Vitamin C Serum",
+                    "The ordinry Ascorbyl Glucoside Solution 12%",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+                "sunscreen": [
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Jenpharm spectrablock Sunblock ",
+                    "Neue Derma Sunscreen spf 50"
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Accufix Daily Hydrating Cleanser",
+                    "Cerave Foaming Facial Cleanser",
+                    "Conatural Rose Face Wash",
+                    "JenPharm MAXDIF Facewash",
+                    "Vince Vitamin C Face Wash",
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                    "Conatural Vitamin C Serum",
+                    "The ordinry Ascorbyl Glucoside Solution 12%",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Neue Derma Moisturzier(occlusive)"
+                ],
+            },
+            "avoid": [
+                "Over-washing face",
+                "Skipping SPF",
+                "Using too many products at once",
+            ],
+            "tip": "Normal skin just needs consistency. A simple twice-daily routine is all you need to maintain healthy skin.",
+            "see_doctor": False,
+        },
+
+        "moderate": {
+            "morning": {
+                "cleanser": [
+                    "Conatural Rose Face Wash",
+                    "Jenpharm MAXDIF Facewash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                    "Cetaphil Gentle Foaming Cleanser",
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "AccuFix Glow Serum",
+                    "Conatural Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "CeraVe AM Facial Moisturizing Lotion",
+                    "Nivea Soft Moisturizing Cream",
+                    "Vince Whitening Moisturiser SPF 20",
+                ],
+                "sunscreen": [
+                    "Shade by ELIXIR SPF 50",
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Garnier Bright Complete SPF 40",
+                    "Jenpharm Sunblock SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Conatural Rose Face Wash",
+                    "Jenpharm MAXDIF Facewash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Cetaphil Gentle skin Cleanser"
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "AccuFix Glow Serum",
+                    "Conatural Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                ],
+                "moisturiser": [
+                    "Neutrogena Hydro Boost Water Gel",
+                    "CeraVe AM Facial Moisturizing Lotion",
+                    "Nivea Soft Moisturizing Cream",
+                    "Neue Derma Moisturizer(occlusive)",
+                ],
+            },
+            "avoid": [
+                "Skipping SPF",
+                "Over-exfoliating",
+            ],
+            "tip": "Normal skin with seasonal changes needs slight adjustment — lighter products in summer, richer in winter.",
+            "see_doctor": False,
+        },
+
+    },
+
+    # ══════════════════════════════════════════════════════════════
+
+"wrinkles/FINE LINES": {
+
+        "mild": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Himalaya Moisturizing Aloe Vera Face Wash",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "Conatural Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                    "AccuFix Glow Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "CeraVe Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Himalaya Nourishing Skin Cream",
+                ],
+                "sunscreen": [
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Shade by ELIXIR SPF 50",
+                    "Jenpharm Sunblock SPF 50",
+                    "CeraVe Hydrating Sunscreen SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Himalaya Moisturizing Aloe Vera Face Wash",
+                    "Conatural Rose Face Wash",
+                    "Jenpharm Dermive Moisturizing Wash",
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "Saeed Ghani Hyaluronic Acid Serum",
+                    "Conatural Vitamin C Serum",
+                    "AccuFix Hydrating Serum",
+                ],
+                "moisturiser": [
+                    "Nivea Soft Moisturizing Cream",
+                    "CeraVe PM Facial Moisturizing Lotion",
+                    "Himalaya Nourishing Skin Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                ],
+            },
+            "avoid": [
+                "Sun exposure without SPF — #1 cause of premature ageing",
+                "Skipping moisturiser",
+                "Smoking",
+            ],
+            "tip": (
+                "Pakistan's intense sun is the biggest cause of premature wrinkles. "
+                "SPF 50 every morning is non-negotiable — even indoors near windows."
+            ),
+            "see_doctor": False,
+        },
+
+        "moderate": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Jenpharm Dermive Moisturizing Wash",
+                    "Conatural Rose Face Wash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "AccuFix Glow Serum",
+                    "Conatural Vitamin C Serum",
+                    "Vince Vitamin C Brightening Serum",
+                ],
+                "moisturiser": [
+                    "CeraVe Moisturizing Cream",
+                    "Nivea Soft Moisturizing Cream",
+                    "Neutrogena Hydro Boost Water Gel",
+                    "Cetaphil Moisturizing Cream",
+                ],
+                "sunscreen": [
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Shade by ELIXIR SPF 50",
+                    "CeraVe Hydrating Sunscreen SPF 50",
+                    "Jenpharm Sunblock SPF 50",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Jenpharm Dermive Moisturizing Wash",
+                    "Conatural Rose Face Wash",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "treatment": [
+                    "Jenpharm MandelAC Serum",
+                    "AccuFix Mandelic Acid Exfoliant",
+                    "The Ordinary Lactic Acid 5% + HA",
+                    "Bio-One Vitamin C Serum",
+                ],
+                "moisturiser": [
+                    "CeraVe Moisturizing Cream",
+                    "Cetaphil Moisturizing Cream",
+                    "Nivea Creme",
+                    "Neutrogena Hydro Boost Water Gel",
+                ],
+            },
+            "avoid": [
+                "Sun without SPF",
+                "Dehydration — drink enough water",
+                "Crash diets",
+            ],
+            "tip": (
+                "Moderate wrinkles respond well to AHAs (mandelic/lactic acid) at night "
+                "combined with Vitamin C in the morning. Be consistent for 12 weeks."
+            ),
+            "see_doctor": False,
+        },
+
+        "severe": {
+            "morning": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Jenpharm Dermive Moisturizing Wash",
+                    "CeraVe Hydrating Cleanser",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "serum": [
+                    "Bio-One Vitamin C Serum",
+                    "AccuFix Glow Serum",
+                    "Conatural Vitamin C Serum",
+                    "Saeed Ghani Hyaluronic Acid Serum",
+                ],
+                "moisturiser": [
+                    "CeraVe Moisturizing Cream",
+                    "Cetaphil Moisturizing Cream",
+                    "Nivea Creme",
+                    "Jenpharm Dermive Moisturizing Cream",
+                ],
+                "sunscreen": [
+                    "Neutrogena Ultra Sheer SPF 50",
+                    "Shade by ELIXIR SPF 50",
+                    "CeraVe Hydrating Sunscreen SPF 50",
+                    "U Veil SPF 60",
+                ],
+            },
+            "evening": {
+                "cleanser": [
+                    "Cetaphil Gentle Foaming Cleanser",
+                    "Jenpharm Dermive Moisturizing Wash",
+                    "CeraVe Hydrating Cleanser",
+                    "AccuFix Hydrating Gentle Daily Cleanser",
+                ],
+                "treatment": [
+                    "Jenpharm MandelAC Serum",
+                    "AccuFix Mandelic Acid Exfoliant",
+                    "The Ordinary Lactic Acid 5% + HA",
+                    "Bio-One Vitamin C Serum",
+                ],
+                "moisturiser": [
+                    "CeraVe Moisturizing Cream",
+                    "Cetaphil Moisturizing Cream",
+                    "Nivea Creme",
+                    "Jenpharm Dermive Moisturizing Cream",
+                ],
+            },
+            "avoid": [
+                "Sun exposure without SPF — absolutely critical",
+                "Smoking and alcohol",
+                "Crash diets and extreme weight loss",
+            ],
+            "tip": (
+                "Severe wrinkles and significant ageing benefit from professional "
+                "dermatological treatments alongside a good home routine."
+            ),
+            "see_doctor": True,
+        },
+    },
+}
+
+
+# ─────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────
+
+VALID_CONDITIONS = list(ROUTINES.keys())
+CONFIDENCE_THRESHOLD = 0.50
+
+
+def get_severity(confidence: float) -> str:
+    """Map a confidence score to a severity tier."""
+    if confidence >= 0.85:
+        return "severe"
+    elif confidence >= 0.65:
+        return "moderate"
+    else:
+        return "mild"
+
+
+def _pick_products(step_pool: dict) -> dict:
+    """Randomly select one product per step from a pool dict."""
+    return {step: random.choice(products) for step, products in step_pool.items()}
+
+
+# ─────────────────────────────────────────────────────────────────
+# MAIN ENGINE
+# ─────────────────────────────────────────────────────────────────
+
+def get_recommendation(
+    condition: str,
+    confidence: float,
+    skin_type: Optional[str] = None,
+) -> dict:
+    """
+    Return a personalised skincare routine for a detected condition.
+
+    Parameters
+    ----------
+    condition   : Skin condition key matching ROUTINES (e.g. 'Acne', 'dry').
+    confidence  : Model confidence score in [0.0, 1.0].
+    skin_type   : Optional skin type label (informational only).
+
+    Returns
+    -------
+    dict with keys:
+        condition, confidence, severity, skin_type, is_uncertain,
+        routine (or None), message, disclaimer
+    """
+    base = {
+        "condition":  condition,
+        "confidence": round(confidence, 3),
+        "skin_type":  skin_type,
+        "disclaimer": "Not a medical diagnosis. Consult a dermatologist for professional advice.",
+    }
+
+    # ── Low confidence ──────────────────────────────────────────
+    if confidence < CONFIDENCE_THRESHOLD:
+        return {
+            **base,
+            "severity":     None,
+            "is_uncertain": True,
+            "routine":      None,
+            "message":      "Results unclear. Please consult a dermatologist.",
+        }
+
+    severity = get_severity(confidence)
+    routine  = ROUTINES.get(condition, {}).get(severity)
+
+    # ── Condition / severity not found ──────────────────────────
+    if not routine:
+        return {
+            **base,
+            "severity":     severity,
+            "is_uncertain": False,
+            "routine":      None,
+            "message":      f"No routine available for '{condition}' ({severity}).",
+        }
+
+    # ── Build routine with random product picks ─────────────────
+    return {
+        **base,
+        "severity":     severity,
+        "is_uncertain": False,
+        "message":      "Routine generated successfully.",
+        "routine": {
+            "morning":    _pick_products(routine["morning"]),
+            "evening":    _pick_products(routine["evening"]),
+            "avoid":      routine["avoid"],
+            "tip":        routine["tip"],
+            "see_doctor": routine["see_doctor"],
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────────
+# PRETTY PRINTER
+# ─────────────────────────────────────────────────────────────────
+
+def print_result(result: dict) -> None:
+    """Print a recommendation result in a readable format."""
+    sep = "─" * 58
+
+    print(f"\n  {sep}")
+    print(f"  Condition  : {result['condition']}")
+    print(f"  Severity   : {result['severity'] or 'N/A'}")
+    print(f"  Confidence : {result['confidence'] * 100:.0f}%")
+    if result["skin_type"]:
+        print(f"  Skin Type  : {result['skin_type']}")
+
+    if result["is_uncertain"]:
+        print(f"\n  ⚠️  {result['message']}")
+    elif result["routine"] is None:
+        print(f"\n  ℹ️  {result['message']}")
+    else:
+        r = result["routine"]
+
+        print(f"\n  🌅 Morning Routine:")
+        for step, product in r["morning"].items():
+            print(f"     {step:<14} →  {product}")
+
+        print(f"\n  🌙 Evening Routine:")
+        for step, product in r["evening"].items():
+            print(f"     {step:<14} →  {product}")
+
+        print(f"\n  ❌ Avoid:")
+        for item in r["avoid"]:
+            print(f"     • {item}")
+
+        print(f"\n  💡 Tip: {r['tip']}")
+
+        if r["see_doctor"]:
+            print(f"\n  🏥 Please see a dermatologist for this condition.")
+
+    print(f"  ⚕️  {result['disclaimer']}")
+    print(f"  {sep}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# TEST
+# ─────────────────────────────────────────────────────────────────
+
+def run_tests() -> None:
+    print("\n" + "=" * 60)
+    print("  DERMALYTIX — RECOMMENDATION ENGINE TEST")
+    print("  Pakistani Products Edition")
+    print("=" * 60)
+
+    test_cases = [
+        ("dark spots",    0.82, "oily"),
+        ("Acne",          0.91, "oily"),
+        ("dry",           0.67, "normal"),
+        ("Dark circles",  0.72, "normal"),
+        ("wrinkles",      0.55, None),
+        ("oily",          0.45, None),        # Below threshold → uncertain
+        ("normal",        0.88, "combination"),
+    ]
+
+    for condition, confidence, skin_type in test_cases:
+        result = get_recommendation(condition, confidence, skin_type)
+        print_result(result)
+
+    print("\n" + "=" * 60)
+
+
+if __name__ == "__main__":
+    run_tests()
+
+
+--- cell 1 (code) ---
+# ── CELL: Multi-condition merge engine ────────────────────
+
+def merge_routines(conditions_with_confidence, skin_type=None):
+    """
+    Takes top predictions from model and merges into one routine.
+
+    Args:
+        conditions_with_confidence: list of dicts
+            [
+                {"condition": "Acne",         "confidence": 0.91},
+                {"condition": "Dark circles",  "confidence": 0.72},
+                {"condition": "oily",          "confidence": 0.68},
+            ]
+        skin_type: optional e.g. "oily", "dry"
+
+    Returns:
+        One merged routine with best products for all conditions
+    """
+
+    # Filter out uncertain conditions (below threshold)
+    valid = [
+        c for c in conditions_with_confidence
+        if c["confidence"] >= CONFIDENCE_THRESHOLD
+    ]
+
+    if not valid:
+        return {
+            "conditions":   [],
+            "is_uncertain": True,
+            "routine":      None,
+            "message":      "No conditions detected with enough confidence. Please consult a dermatologist.",
+            "disclaimer":   "Not a medical diagnosis. Consult a dermatologist."
+        }
+
+    # Get individual routines for each valid condition
+    individual_routines = []
+    for item in valid:
+        result = get_recommendation(
+            condition   = item["condition"],
+            confidence  = item["confidence"],
+            skin_type   = skin_type
+        )
+        if result["routine"]:
+            individual_routines.append({
+                "condition":  item["condition"],
+                "confidence": item["confidence"],
+                "severity":   result["severity"],
+                "routine":    result["routine"]
+            })
+
+    if not individual_routines:
+        return {
+            "conditions":   valid,
+            "is_uncertain": False,
+            "routine":      None,
+            "message":      "Routines not available for detected conditions.",
+            "disclaimer":   "Not a medical diagnosis. Consult a dermatologist."
+        }
+
+    # ── Merge strategy ──────────────────────────────────────
+    # For each step (cleanser, serum etc.) collect all products
+    # from all conditions, then pick the one that appears most
+    # If tie → pick from highest confidence condition
+
+    from collections import Counter
+
+    def merge_step(step_name, time_of_day):
+        """Collect all products for a step across all conditions."""
+        all_products = []
+        for r in individual_routines:
+            routine_time = r["routine"].get(time_of_day, {})
+            product = routine_time.get(step_name)
+            if product:
+                all_products.append((product, r["confidence"]))
+
+        if not all_products:
+            return None
+
+        # Count frequency of each product
+        product_counts = Counter(p for p, _ in all_products)
+        max_count = max(product_counts.values())
+
+        # Get products with highest frequency
+        top_products = [p for p, c in product_counts.items() if c == max_count]
+
+        # If tie — pick from highest confidence condition
+        if len(top_products) > 1:
+            for r in sorted(individual_routines, key=lambda x: x["confidence"], reverse=True):
+                routine_time = r["routine"].get(time_of_day, {})
+                product = routine_time.get(step_name)
+                if product in top_products:
+                    return product
+
+        return top_products[0]
+
+    # Get all step keys from morning and evening across all routines
+    morning_steps = set()
+    evening_steps = set()
+    for r in individual_routines:
+        morning_steps.update(r["routine"]["morning"].keys())
+        evening_steps.update(r["routine"]["evening"].keys())
+
+    # Build merged morning and evening
+    merged_morning = {}
+    for step in morning_steps:
+        product = merge_step(step, "morning")
+        if product:
+            merged_morning[step] = product
+
+    merged_evening = {}
+    for step in evening_steps:
+        product = merge_step(step, "evening")
+        if product:
+            merged_evening[step] = product
+
+    # Merge avoid lists — combine all unique items
+    all_avoids = []
+    for r in individual_routines:
+        for item in r["routine"]["avoid"]:
+            if item not in all_avoids:
+                all_avoids.append(item)
+
+    # Merge tips — use tip from highest confidence condition
+    primary = max(individual_routines, key=lambda x: x["confidence"])
+    merged_tip = primary["routine"]["tip"]
+
+    # see_doctor — True if ANY condition says True
+    see_doctor = any(r["routine"]["see_doctor"] for r in individual_routines)
+
+    return {
+        "conditions": [
+            {
+                "condition":  r["condition"],
+                "confidence": r["confidence"],
+                "severity":   r["severity"]
+            }
+            for r in individual_routines
+        ],
+        "skin_type":    skin_type,
+        "is_uncertain": False,
+        "message":      "Merged routine generated successfully.",
+        "routine": {
+            "morning":    merged_morning,
+            "evening":    merged_evening,
+            "avoid":      all_avoids,
+            "tip":        merged_tip,
+            "see_doctor": see_doctor,
+        },
+        "disclaimer": "Not a medical diagnosis. Consult a dermatologist for professional advice."
+    }
+
+
+# ── Pretty printer for merged result ──────────────────────
+def print_merged_result(result):
+    print("\n" + "="*60)
+    print("  DERMALYTIX — MULTI-CONDITION RESULT")
+    print("="*60)
+
+    if result["is_uncertain"]:
+        print(f"\n  ⚠️  {result['message']}")
+    else:
+        print(f"\n  Detected conditions:")
+        for c in result["conditions"]:
+            print(f"    • {c['condition']:<20} {c['confidence']*100:.0f}%  ({c['severity']})")
+
+        if result.get("skin_type"):
+            print(f"  Skin type: {result['skin_type']}")
+
+        r = result["routine"]
+        print(f"\n  🌅 Morning Routine:")
+        for step, product in r["morning"].items():
+            print(f"     {step:<15} →  {product}")
+
+        print(f"\n  🌙 Evening Routine:")
+        for step, product in r["evening"].items():
+            print(f"     {step:<15} →  {product}")
+
+        print(f"\n  ❌ Avoid:")
+        for item in r["avoid"]:
+            print(f"     • {item}")
+
+        print(f"\n  💡 Tip: {r['tip']}")
+
+        if r["see_doctor"]:
+            print(f"\n  🏥 Please consult a dermatologist!")
+
+    print(f"\n  ⚕️  {result['disclaimer']}")
+    print("="*60)
+
+
+# ── Test multi-condition merge ─────────────────────────────
+print("Testing multi-condition merge engine...\n")
+
+# Test 1: Acne + Dark circles + Oily
+result1 = merge_routines([
+    {"condition": "Acne",         "confidence": 0.91},
+    {"condition": "Dark circles", "confidence": 0.72},
+    {"condition": "oily",         "confidence": 0.68},
+], skin_type="oily")
+print("TEST 1 — Acne + Dark circles + Oily:")
+print_merged_result(result1)
+
+# Test 2: dark spots + dry
+result2 = merge_routines([
+    {"condition": "dark spots", "confidence": 0.82},
+    {"condition": "dry",        "confidence": 0.71},
+], skin_type="dry")
+print("\nTEST 2 — Dark spots + Dry:")
+print_merged_result(result2)
+
+# Test 3: All below threshold
+result3 = merge_routines([
+    {"condition": "Acne",   "confidence": 0.40},
+    {"condition": "oily",   "confidence": 0.35},
+])
+print("\nTEST 3 — All uncertain:")
+print_merged_result(result3)
+
+============================================================ fastapi_backend (1).ipynb ============================================================
+
+--- cell 0 (code) ---
+"""
+Dermalytix — FastAPI Backend (Colab Version)
+=============================================
+Run all cells top to bottom in order.
+
+Endpoints:
+  POST /register
+  POST /login
+  POST /analyze
+  GET  /history/{user_id}
+  GET  /health
+"""
+
+# ══════════════════════════════════════════════════════════
+# CELL 1 — Install dependencies
+# ══════════════════════════════════════════════════════════
+# Run this cell first
+
+import subprocess
+subprocess.run([
+    "pip", "install",
+    "fastapi", "uvicorn", "python-multipart",
+    "sqlalchemy", "passlib[bcrypt]", "python-jose[cryptography]",
+    "pillow", "torch", "torchvision", "onnxruntime",
+    "nest-asyncio", "pyngrok", "-q"
+])
+print("✅ Dependencies installed")
+
+--- cell 1 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 2 — Mount Drive + imports
+# ══════════════════════════════════════════════════════════
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os, io, uuid, random, time, shutil
+from datetime import datetime, timedelta
+from typing import Optional, List
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import models, transforms
+from PIL import Image
+
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from pydantic import BaseModel
+
+from sqlalchemy import create_engine, Column, String, Float, Integer, DateTime, Boolean, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+
+import nest_asyncio
+nest_asyncio.apply()
+
+print("✅ Imports done")
+
+--- cell 2 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 3 — Config
+# ══════════════════════════════════════════════════════════
+
+# ── Paths ──
+MODEL_PATH  = "/content/drive/MyDrive/DERMALYTIX_MODEL/dermalytix_best_v2.pth"
+UPLOAD_DIR  = "/content/drive/MyDrive/DERMALYTIX_UPLOADS"
+DB_PATH     = "/content/drive/MyDrive/DERMALYTIX_MODEL/dermalytix.db"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# ── Auth ──
+SECRET_KEY    = "dermalytix-secret-key-change-in-production"
+ALGORITHM     = "HS256"
+TOKEN_EXPIRE  = 60 * 24   # 24 hours in minutes
+
+# ── Model ──
+DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+NUM_CLASSES = 7
+CLASS_NAMES = [
+    "Acne", "Dark circles", "dark spots",
+    "dry", "normal", "oily", "wrinkles:FINE LINES"
+]
+CONFIDENCE_THRESHOLD = 0.50
+TOP_N_CONDITIONS     = 3    # return top 3 predictions
+
+print(f"✅ Config loaded")
+print(f"   Device  : {DEVICE}")
+print(f"   Model   : {MODEL_PATH}")
+
+--- cell 3 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 4 — Database setup
+# ══════════════════════════════════════════════════════════
+
+engine = create_engine(
+    f"sqlite:///{DB_PATH}",
+    connect_args={"check_same_thread": False}
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# ── Models ──
+class User(Base):
+    __tablename__ = "users"
+    id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name       = Column(String)
+    email      = Column(String, unique=True, index=True)
+    password   = Column(String)
+    age        = Column(Integer, nullable=True)
+    gender     = Column(String, nullable=True)
+    skin_type  = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class AnalysisSession(Base):
+    __tablename__ = "analysis_sessions"
+    id            = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id       = Column(String, index=True)
+    image_url     = Column(String)
+    condition     = Column(String)
+    display_label = Column(String)
+    confidence    = Column(Float)
+    severity      = Column(String)
+    skin_type     = Column(String, nullable=True)
+    routine       = Column(Text)   # JSON string
+    see_doctor    = Column(Boolean, default=False)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+print("✅ Database ready →", DB_PATH)
+
+--- cell 4 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 5 — Auth helpers
+# ══════════════════════════════════════════════════════════
+
+pwd_context   = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+def create_token(data: dict) -> str:
+    payload = data.copy()
+    payload["exp"] = datetime.utcnow() + timedelta(minutes=TOKEN_EXPIRE)
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email   = payload.get("sub")
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+print("✅ Auth helpers ready")
+
+--- cell 5 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 6 — Load AI model
+# ══════════════════════════════════════════════════════════
+
+def build_model(num_classes=7):
+    model = models.efficientnet_b0(weights=None)
+    in_features = model.classifier[1].in_features
+    model.classifier = nn.Sequential(
+        nn.Dropout(p=0.3),
+        nn.Linear(in_features, 256),
+        nn.ReLU(),
+        nn.Dropout(p=0.2),
+        nn.Linear(256, num_classes)
+    )
+    return model
+
+checkpoint   = torch.load(MODEL_PATH, map_location=DEVICE)
+skin_model   = build_model(NUM_CLASSES)
+skin_model.load_state_dict(checkpoint["model_state_dict"])
+skin_model    = skin_model.to(DEVICE)
+skin_model.eval()
+
+img_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225]),
+])
+
+print(f"✅ Model loaded → {NUM_CLASSES} classes")
+print(f"   Classes: {CLASS_NAMES}")
+
+--- cell 6 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 7 — Label map
+# ══════════════════════════════════════════════════════════
+
+LABEL_MAP = {
+    "Acne": {
+        "display":     "Acne / Pimples / Breakouts",
+        "description": "Active acne lesions including papules, pustules or comedones",
+        "icon":        "🔴"
+    },
+    "Dark circles": {
+        "display":     "Dark Circles / Periorbital Hyperpigmentation",
+        "description": "Darkening of the skin under and around the eyes",
+        "icon":        "👁️"
+    },
+    "dark spots": {
+        "display":     "Dark Spots / Hyperpigmentation / Post-Acne Marks",
+        "description": "Uneven skin tone, dark patches or marks left after acne or sun damage",
+        "icon":        "🟤"
+    },
+    "dry": {
+        "display":     "Dry Skin / Dehydrated Skin",
+        "description": "Skin lacking moisture, may feel tight, flaky or rough",
+        "icon":        "🏜️"
+    },
+    "normal": {
+        "display":     "Normal / Balanced Skin",
+        "description": "Well-balanced skin with no major concerns",
+        "icon":        "✨"
+    },
+    "oily": {
+        "display":     "Oily Skin / Seborrhoea",
+        "description": "Excess sebum production causing shine and enlarged pores",
+        "icon":        "💧"
+    },
+    "wrinkles:FINE LINES": {
+        "display":     "Wrinkles / Fine Lines / Ageing Skin",
+        "description": "Signs of ageing including fine lines, wrinkles and loss of elasticity",
+        "icon":        "〰️"
+    },
+}
+
+def get_display_label(raw_class):
+    return LABEL_MAP.get(raw_class, {
+        "display":     raw_class,
+        "description": "",
+        "icon":        "🔍"
+    })
+
+print("✅ Label map ready")
+
+--- cell 7 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 8 — Paste your FULL recommendation engine here
+# ══════════════════════════════════════════════════════════
+# Copy everything from 03_recommendation_engine.ipynb
+# from ROUTINES = { ... } all the way to merge_routines()
+# Paste it below this comment:
+
+# ── PASTE RECOMMENDATION ENGINE CODE HERE ──
+
+# (After pasting, the ROUTINES dict, get_severity(),
+#  get_recommendation() and merge_routines() will be available)
+
+print("✅ Recommendation engine loaded")
+
+--- cell 8 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 9 — Prediction function
+# ══════════════════════════════════════════════════════════
+
+def predict_image(image_bytes: bytes, top_n: int = TOP_N_CONDITIONS):
+    """
+    Run model on image bytes.
+    Returns top N predictions with confidence scores.
+    """
+    img        = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    tensor     = img_transform(img).unsqueeze(0).to(DEVICE)
+
+    with torch.no_grad():
+        output = skin_model(tensor)
+        probs  = F.softmax(output, dim=1)[0]
+
+    # Get top N predictions
+    top_probs, top_idxs = probs.topk(top_n)
+
+    predictions = []
+    for prob, idx in zip(top_probs, top_idxs):
+        condition  = CLASS_NAMES[idx.item()]
+        confidence = prob.item()
+        if confidence >= CONFIDENCE_THRESHOLD:
+            label = get_display_label(condition)
+            predictions.append({
+                "condition":   condition,
+                "display":     label["display"],
+                "description": label["description"],
+                "icon":        label["icon"],
+                "confidence":  round(confidence, 3),
+            })
+
+    return predictions
+
+print("✅ Prediction function ready")
+
+--- cell 9 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 10 — Pydantic schemas
+# ══════════════════════════════════════════════════════════
+
+class RegisterRequest(BaseModel):
+    name:      str
+    email:     str
+    password:  str
+    age:       Optional[int]   = None
+    gender:    Optional[str]   = None
+    skin_type: Optional[str]   = None
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type:   str
+    user_id:      str
+    name:         str
+
+class HistoryItem(BaseModel):
+    session_id:    str
+    condition:     str
+    display_label: str
+    confidence:    float
+    severity:      str
+    created_at:    str
+
+print("✅ Schemas ready")
+
+--- cell 10 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 11 — FastAPI app + routes
+# ══════════════════════════════════════════════════════════
+
+import json
+
+app = FastAPI(
+    title       = "Dermalytix API",
+    description = "AI-powered skin analysis for Pakistani users",
+    version     = "1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins     = ["*"],
+    allow_credentials = True,
+    allow_methods     = ["*"],
+    allow_headers     = ["*"],
+)
+
+# ── Health check ──────────────────────────────────────────
+@app.get("/health")
+def health():
+    return {
+        "status":  "running",
+        "model":   "EfficientNetB0",
+        "classes": NUM_CLASSES,
+        "version": "1.0.0"
+    }
+
+# ── Register ──────────────────────────────────────────────
+@app.post("/register")
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == req.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user = User(
+        name      = req.name,
+        email     = req.email,
+        password  = hash_password(req.password),
+        age       = req.age,
+        gender    = req.gender,
+        skin_type = req.skin_type,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_token({"sub": user.email})
+    return {
+        "message":      "Account created successfully",
+        "access_token": token,
+        "token_type":   "bearer",
+        "user_id":      user.id,
+        "name":         user.name,
+    }
+
+# ── Login ─────────────────────────────────────────────────
+@app.post("/login")
+def login(
+    form: OAuth2PasswordRequestForm = Depends(),
+    db:   Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.email == form.username).first()
+    if not user or not verify_password(form.password, user.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_token({"sub": user.email})
+    return {
+        "access_token": token,
+        "token_type":   "bearer",
+        "user_id":      user.id,
+        "name":         user.name,
+    }
+
+# ── Analyze ───────────────────────────────────────────────
+@app.post("/analyze")
+async def analyze(
+    image:        UploadFile = File(...),
+    name:         str        = Form(...),
+    age:          int        = Form(...),
+    gender:       str        = Form(...),
+    skin_type:    str        = Form(...),
+    main_concern: str        = Form(...),
+    db:           Session    = Depends(get_db),
+    current_user: User       = Depends(get_current_user),
+):
+    # 1. Validate image
+    if image.content_type not in ["image/jpeg", "image/png", "image/webp"]:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, WebP images allowed")
+
+    image_bytes = await image.read()
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large. Max 10MB")
+
+    # 2. Save image
+    filename  = f"{uuid.uuid4()}.jpg"
+    save_path = os.path.join(UPLOAD_DIR, filename)
+    with open(save_path, "wb") as f:
+        f.write(image_bytes)
+    image_url = f"/images/{filename}"
+
+    # 3. Run model prediction
+    predictions = predict_image(image_bytes, top_n=TOP_N_CONDITIONS)
+
+    if not predictions:
+        return {
+            "session_id":    None,
+            "is_uncertain":  True,
+            "message":       "No condition detected with enough confidence. Please consult a dermatologist.",
+            "predictions":   [],
+            "routine":       None,
+            "disclaimer":    "Not a medical diagnosis."
+        }
+
+    # 4. Run recommendation engine
+    recommendation = merge_routines(
+        conditions_with_confidence = [
+            {"condition": p["condition"], "confidence": p["confidence"]}
+            for p in predictions
+        ],
+        skin_type = skin_type
+    )
+
+    # 5. Primary condition (highest confidence)
+    primary    = predictions[0]
+    label_info = get_display_label(primary["condition"])
+
+    # 6. Save to database
+    session = AnalysisSession(
+        user_id       = current_user.id,
+        image_url     = image_url,
+        condition     = primary["condition"],
+        display_label = label_info["display"],
+        confidence    = primary["confidence"],
+        severity      = recommendation.get("conditions", [{}])[0].get("severity", "mild"),
+        skin_type     = skin_type,
+        routine       = json.dumps(recommendation.get("routine")),
+        see_doctor    = recommendation.get("routine", {}).get("see_doctor", False),
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    # 7. Return full response
+    return {
+        "session_id": session.id,
+        "user": {
+            "name":         name,
+            "age":          age,
+            "gender":       gender,
+            "skin_type":    skin_type,
+            "main_concern": main_concern,
+        },
+        "predictions":  predictions,
+        "primary": {
+            "condition":    primary["condition"],
+            "display_label": label_info["display"],
+            "description":  label_info["description"],
+            "icon":         label_info["icon"],
+            "confidence":   primary["confidence"],
+            "severity":     session.severity,
+        },
+        "routine":        recommendation.get("routine"),
+        "is_uncertain":   recommendation.get("is_uncertain", False),
+        "saved_to_history": True,
+        "disclaimer":     "⚠️ Not a medical diagnosis. Results are AI-generated suggestions only. Please consult a dermatologist for professional advice.",
+    }
+
+# ── History ───────────────────────────────────────────────
+@app.get("/history/{user_id}")
+def get_history(
+    user_id:      str,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
+):
+    # Only allow users to see their own history
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    sessions = (
+        db.query(AnalysisSession)
+        .filter(AnalysisSession.user_id == user_id)
+        .order_by(AnalysisSession.created_at.desc())
+        .all()
+    )
+
+    return {
+        "user_id":  user_id,
+        "total":    len(sessions),
+        "history": [
+            {
+                "session_id":    s.id,
+                "condition":     s.condition,
+                "display_label": s.display_label,
+                "confidence":    s.confidence,
+                "severity":      s.severity,
+                "skin_type":     s.skin_type,
+                "see_doctor":    s.see_doctor,
+                "image_url":     s.image_url,
+                "created_at":    s.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+            for s in sessions
+        ]
+    }
+
+print("✅ All routes registered")
+print("\nEndpoints:")
+print("  GET  /health")
+print("  POST /register")
+print("  POST /login")
+print("  POST /analyze")
+print("  GET  /history/{user_id}")
+
+--- cell 11 (code) ---
+# Add your ngrok authtoken
+from pyngrok import ngrok
+
+ngrok.set_auth_token("3EAR4zwLjiCwBT1SIpJ8oLzUVxO_7wCcWyqY2DsjeXjjkCPF7")  # ← paste your token
+print("✅ ngrok authenticated")
+
+--- cell 12 (code) ---
+# ══════════════════════════════════════════════════════════
+# CELL 12 — Run server + get public URL
+# ══════════════════════════════════════════════════════════
+
+import uvicorn
+from pyngrok import ngrok
+
+# Kill any existing tunnels
+ngrok.kill()
+
+# Start ngrok tunnel
+public_url = ngrok.connect(8000)
+print("\n" + "="*55)
+print("  DERMALYTIX API IS LIVE!")
+print("="*55)
+print(f"\n  🌐 Public URL : {public_url}")
+print(f"  📚 API Docs  : {public_url}/docs")
+print(f"  ❤️  Health    : {public_url}/health")
+print("\n  Share the Public URL with Antigravity!")
+print("="*55)
+
+# Run server
+import uvicorn
+import asyncio
+
+# Fix for Colab's event loop
+config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+server = uvicorn.Server(config)
+await server.serve()

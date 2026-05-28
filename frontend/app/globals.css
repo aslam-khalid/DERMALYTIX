@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #2563eb;
+  --navy: #1a2b4a;
+  --background: #f8fafc;
+}
+
+body {
+  @apply bg-background text-text-primary antialiased;
+}
+
+.card {
+  @apply rounded-card bg-white shadow-sm;
+}
+
+.btn-primary {
+  @apply rounded-btn bg-primary px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:hover:scale-100;
+}
+
+.btn-outline {
+  @apply rounded-btn border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-text-primary transition hover:bg-slate-50 hover:scale-[1.02] active:scale-[0.98];
+}
+
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.page-enter {
+  animation: pageFadeIn 0.2s ease-out forwards;
+}
+
+@keyframes buttonEntrance {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-button-entrance {
+  animation: buttonEntrance 0.35s ease-out forwards;
+}
+
+.input-field {
+  @apply w-full rounded-btn border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(1rem) scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in {
+  animation: slideIn 0.2s ease-out forwards;
+}
