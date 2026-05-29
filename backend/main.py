@@ -40,21 +40,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
-_default_origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-]
-_cors = os.getenv("CORS_ORIGINS", "").strip()
-origins = (
-    _default_origins
-    if not _cors or _cors == "*"
-    else [o.strip() for o in _cors.split(",") if o.strip()]
-)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "https://dermalytix.vercel.app",
+        "https://*.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
