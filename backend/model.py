@@ -2,6 +2,24 @@ import io
 import os
 from typing import Any, Dict, List, Optional
 
+import gdown
+
+MODEL_PATH = "models/dermalytix_best_v2.pth"
+GDRIVE_ID  = "1m9fuxZwTUDZ9fKw6xRwwM1DAzmxhWD5j"
+
+
+def download_model():
+    """Download model weights from Google Drive if not already present."""
+    if not os.path.exists(MODEL_PATH):
+        os.makedirs("models", exist_ok=True)
+        print("Downloading model weights from Google Drive...")
+        gdown.download(
+            f"https://drive.google.com/uc?id={GDRIVE_ID}",
+            MODEL_PATH,
+            quiet=False,
+        )
+        print("Model downloaded successfully!")
+
 NUM_CLASSES = 7
 CLASS_NAMES = [
     "Acne",
@@ -91,11 +109,16 @@ def get_display_label(raw_class: str) -> Dict[str, str]:
 
 def load_model(model_path: Optional[str] = None) -> bool:
     global skin_model, _model_loaded, _device_str
-    path = model_path or os.getenv("MODEL_PATH", "./models/dermalytix_best_v2.pth")
+
+    # Auto-download weights from Google Drive if missing
+    download_model()
+
+    path = model_path or os.getenv("MODEL_PATH", MODEL_PATH)
     if not os.path.isfile(path):
         alt = [
             "./models/dermalytix_best.pth",
             "./models/dermalytix_best_v2.pth",
+            MODEL_PATH,
         ]
         path = next((p for p in alt if os.path.isfile(p)), path)
 
