@@ -180,3 +180,17 @@ export function severityColor(severity: string): string {
 export function vitalityFromConfidence(confidence: number): number {
   return Math.min(100, Math.round(confidence * 100 + 10));
 }
+
+// Keep backend awake
+const keepAlive = () => {
+  setInterval(async () => {
+    try {
+      await fetch(`${API_BASE}/health`);
+    } catch (e) {}
+  }, 5 * 60 * 1000); // every 5 minutes
+};
+
+// Call when app loads
+if (typeof window !== "undefined") {
+  keepAlive();
+}
