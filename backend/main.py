@@ -10,6 +10,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Request,
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,6 +56,7 @@ app.add_middleware(
 )
 
 app.mount("/images", StaticFiles(directory=UPLOAD_DIR), name="images")
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.on_event("startup")
@@ -128,6 +130,7 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
 
 @app.post("/analyze")
 async def analyze(
+    request: Request,
     image: UploadFile = File(...),
     name: str = Form(...),
     age: int = Form(...),
@@ -150,7 +153,7 @@ async def analyze(
     save_path = os.path.join(UPLOAD_DIR, filename)
     with open(save_path, "wb") as f:
         f.write(image_bytes)
-    image_url = f"/images/{filename}"
+    image_url = f"/uploads/{filename}"
 
     try:
         predictions = predict_image(image_bytes)
@@ -220,7 +223,7 @@ async def analyze(
         "is_uncertain": recommendation.get("is_uncertain", False),
         "see_doctor": see_doctor,
         "saved_to_history": True,
-        "image_url": image_url,
+        "image_url": f"{request.base_url}uploads/{filename}",
         "disclaimer": "⚠️ Not a medical diagnosis. Results are AI-generated suggestions only. Please consult a dermatologist for professional advice.",
     }
 

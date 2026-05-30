@@ -155,10 +155,10 @@ export default function ResultsPage() {
   const conf = data.primary?.confidence ?? 0.8;
   const score = vitalityFromConfidence(conf);
   const stroke = ringColor(score);
-  const imgSrc = data.image_url?.startsWith("http")
+  const imageUrl = data.image_url?.startsWith("http")
     ? data.image_url
     : data.image_url
-      ? `${API_BASE}${data.image_url}`
+      ? `${process.env.NEXT_PUBLIC_API_URL || API_BASE}${data.image_url}`
       : null;
 
   const detected =
@@ -322,14 +322,17 @@ export default function ResultsPage() {
         </div>
       </div>
 
-      {imgSrc && (
+      {imageUrl && (
         <div className="mt-6 card border border-slate-100/60 shadow-sm bg-white p-8">
           <h3 className="text-lg font-bold text-navy mb-5 text-center">Skin Analysis</h3>
           <div className="flex flex-col items-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={imgSrc}
-              alt="Uploaded skin scan"
+              src={imageUrl}
+              alt="Skin analysis photo"
+              onError={(e) => {
+                (e.target as any).style.display = 'none';
+              }}
               className="max-h-[400px] max-w-[500px] w-full object-cover rounded-2xl border border-slate-100"
               style={{ borderRadius: 16 }}
             />
