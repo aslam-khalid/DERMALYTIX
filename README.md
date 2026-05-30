@@ -97,33 +97,67 @@ User → Next.js Frontend → FastAPI Backend → EfficientNetB0 Model
 - PyTorch
 - EfficientNetB0
 
+ ### Machine Learning
+- TensorFlow / Keras
+- EfficientNetB0
+- OpenCV
+- NumPy
+- Pandas
+
+---
+
+## Project Structure
+
+```text
+DERMALYTIX/
+│
+├── frontend/                         # Next.js 14 Frontend Application
+│   ├── app/                          # App Router pages and routes
+│   ├── components/                   # Reusable UI components
+│   └── lib/                          # API client, utilities, helpers
+│
+├── backend/                          # FastAPI Backend Application
+│   ├── main.py                       # API routes and endpoints
+│   ├── model.py                      # EfficientNetB0 model inference
+│   ├── recommendation.py             # Pakistani skincare recommendation engine
+│   ├── database.py                   # PostgreSQL database configuration
+│   ├── auth.py                       # JWT authentication and authorization
+│   └── schemas.py                    # Pydantic request/response schemas
+│
+├── notebooks/                        # Jupyter Notebooks
+│   ├── 01_cleaning_augmentation_splitting.ipynb
+│   ├── 02_model_training.ipynb
+│   ├── 03_recommendation_engine.ipynb
+│   └── 04_fastapi_backend.ipynb
+│
+├── datasets/                         # Skin disease datasets
+│
+├── models/                           # Trained model weights
+│
+├── requirements.txt                  # Python dependencies
+│
+├── .env                              # Environment variables
+│
+├── .gitignore                        # Git ignored files
+│
+└── README.md                         # Project documentation
+```
+
 ### Deployment
 - Frontend → Vercel
 - Backend → Railway
 - Database → PostgreSQL (Railway)
 - Model → Google Drive (auto-download)
 
----
+## Features
 
-## 📁 Repository Structure
-DERMALYTIX/
-├── frontend/          # Next.js 14 application
-│   ├── app/           # Pages and routing
-│   ├── components/    # Reusable UI components
-│   └── lib/           # API client and utilities
-├── backend/           # FastAPI application
-│   ├── main.py        # Routes and endpoints
-│   ├── model.py       # EfficientNetB0 inference
-│   ├── recommendation.py  # Pakistani product engine
-│   ├── database.py    # PostgreSQL setup
-│   ├── auth.py        # JWT authentication
-│   └── schemas.py     # Pydantic models
-├── All NOTEBOOKS/     # Jupyter notebooks
-│   ├── 01_cleaning_augmentation_splitting.ipynb
-│   ├── 02_model_training.ipynb
-│   ├── 03_recommendation_engine.ipynb
-│   └── 04_fastapi_backend.ipynb
-└── README.md
+- AI-based skin disease detection
+- EfficientNetB0 image classification
+- Pakistani skincare product recommendations
+- Secure JWT authentication
+- PostgreSQL data storage
+- Responsive modern UI
+- RESTful API architecture
 ---
 
 ## 🚀 API Endpoints
